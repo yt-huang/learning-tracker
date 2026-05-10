@@ -25,3 +25,11 @@ input[type=range]{-webkit-appearance:none;appearance:none;height:6px;border-radi
 .milestone-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}.milestone-title{font-weight:700;cursor:pointer;padding:2px 6px;border-radius:4px}.milestone-title:hover{background:rgba(96,165,250,.1)}.milestone-actions{display:flex;gap:4px}.milestone-toolbar{display:flex;gap:8px;margin:12px 0;align-items:center}
 /* Task card */
 .task{display:grid;grid-template-columns:1fr auto;gap:12px;padding:12px;margin:8px 0;background:rgba(8,17,31,.4);border-radius:12px;align-items:start}.task b{font-size:14px}.task p{font-size:13px;color:var(--muted);margin:4px 0}.task-actions{display:flex;flex-direction:column;gap:6px;align-items:flex-end}
+
+/* User badge */
+.user-badge{padding:8px 0;border-top:1px solid var(--line);margin-top:auto}
+/* User management table */
+table th,table td{padding:8px 12px!important;font-size:14px;vertical-align:middle}
+table tr:hover{background:rgba(255,255,255,.03)}
+/* Login/Register card toggle */
+.login-card{width:min(420px,100%);background:rgba(16,27,45,.88);border:1px solid var(--line);border-radius:28px;padding:34px;box-shadow:0 24px 80px #0008}

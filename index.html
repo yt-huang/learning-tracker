@@ -3,27 +3,49 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Learning Tracker · SQLite 学习计划跟踪系统</title>
+  <title>Learning Tracker · 学习计划跟踪系统</title>
   <link rel="stylesheet" href="css/style.css" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/sql-wasm.js"></script>
 </head>
 <body>
+  <!-- ==================== LOGIN / REGISTER ==================== -->
   <section id="login-screen" class="login-screen">
-    <div class="login-card">
+    <div class="login-card" id="login-card">
       <div class="brand-badge">LT</div>
       <h1>Learning Tracker</h1>
-      <p>基于 SQLite 的学习计划生成与跟踪系统</p>
+      <p>多用户学习计划生成与跟踪系统</p>
+      <!-- Login form -->
       <form id="login-form">
-        <label>用户名<input id="username" autocomplete="username" value="admin" /></label>
+        <label>用户名<input id="username" autocomplete="username" placeholder="请输入用户名" /></label>
         <label>密码<input id="password" type="password" autocomplete="current-password" placeholder="请输入密码" /></label>
         <button type="submit">登录</button>
         <small id="login-error" class="error"></small>
       </form>
-      <div class="hint">演示账号：admin / admin123</div>
+      <div style="margin-top:14px;text-align:center;font-size:13px;color:var(--muted)">
+        没有账号？<a href="#" id="show-register" style="color:var(--brand)">注册</a>
+      </div>
       <div id="session-warning" class="hidden" style="margin-top:10px;padding:8px;border:1px solid var(--warn);border-radius:8px;font-size:12px;color:var(--warn)"></div>
+    </div>
+
+    <!-- Register card (hidden initially) -->
+    <div class="login-card hidden" id="register-card">
+      <div class="brand-badge">LT</div>
+      <h1>注册账号</h1>
+      <p>创建账号后即可使用学习跟踪系统</p>
+      <form id="register-form">
+        <label>用户名<input id="reg-username" placeholder="至少2个字符" minlength="2" required /></label>
+        <label>密码<input id="reg-password" type="password" placeholder="至少4个字符" minlength="4" required /></label>
+        <label>邮箱（选填）<input id="reg-email" type="email" placeholder="your@email.com" /></label>
+        <button type="submit" class="primary">注册</button>
+        <small id="register-error" class="error"></small>
+      </form>
+      <div style="margin-top:14px;text-align:center;font-size:13px;color:var(--muted)">
+        已有账号？<a href="#" id="show-login" style="color:var(--brand)">登录</a>
+      </div>
     </div>
   </section>
 
+  <!-- ==================== MAIN APP ==================== -->
   <main id="app" class="app hidden">
     <aside class="sidebar">
       <div class="logo"><span>LT</span><strong>Learning Tracker</strong></div>
@@ -31,8 +53,10 @@
         <button data-view="dashboard" class="nav-btn active">仪表盘</button>
         <button data-view="plans" class="nav-btn">学习计划</button>
         <button data-view="logs" class="nav-btn">学习日志</button>
+        <button data-view="users" class="nav-btn admin-only hidden">用户管理</button>
         <button data-view="data" class="nav-btn">数据管理</button>
       </nav>
+      <div id="user-badge" class="user-badge"></div>
       <button id="logout-btn" class="ghost danger">退出登录</button>
     </aside>
 
@@ -40,7 +64,7 @@
       <header class="topbar">
         <div>
           <h2 id="view-title">仪表盘</h2>
-          <p id="view-subtitle">SQLite + IndexedDB 实时持久化</p>
+          <p id="view-subtitle">学习数据来自浏览器 SQLite 数据库</p>
         </div>
         <button id="new-plan-btn" class="primary">+ 从链接生成计划</button>
       </header>
@@ -49,12 +73,14 @@
       <section id="plans-view" class="view hidden"></section>
       <section id="plan-detail-view" class="view hidden"></section>
       <section id="logs-view" class="view hidden"></section>
+      <section id="users-view" class="view hidden"></section>
       <section id="data-view" class="view hidden"></section>
     </section>
   </main>
 
+  <!-- ==================== DIALOGS ==================== -->
   <dialog id="plan-dialog" class="modal">
-      <form id="plan-form" method="dialog">
+    <form id="plan-form" method="dialog">
       <h3>从学习链接生成计划</h3>
       <p class="modal-note">快速生成离线可用；AI 深度分析会读取链接内容并生成更贴合资料结构的阶段目标和任务。</p>
       <label>学习链接<input id="source-url" placeholder="https://github.com/luongnv89/claude-howto" required /></label>
@@ -118,6 +144,26 @@
       <div class="modal-actions">
         <button type="button" class="ghost" id="cancel-log">取消</button>
         <button type="submit" class="primary">写入 SQLite</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="edit-user-dialog" class="modal">
+    <form id="edit-user-form" method="dialog">
+      <h3>编辑用户</h3>
+      <input type="hidden" id="edit-user-id" />
+      <label>用户名<input id="edit-user-username" required /></label>
+      <label>邮箱<input id="edit-user-email" type="email" /></label>
+      <label>角色
+        <select id="edit-user-role">
+          <option value="user">普通用户</option>
+          <option value="admin">管理员</option>
+        </select>
+      </label>
+      <label>新密码（留空不修改）<input id="edit-user-password" type="password" placeholder="留空则不修改密码" /></label>
+      <div class="modal-actions">
+        <button type="button" class="ghost" id="cancel-edit-user">取消</button>
+        <button type="submit" class="primary">保存</button>
       </div>
     </form>
   </dialog>

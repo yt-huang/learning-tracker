@@ -18,38 +18,124 @@ function progBarClass(v) { const n = Number(v || 0); return n >= 70 ? 'progress-
 
 async function boot() {
   bindAuth();
-  if (Auth.isLoggedIn()) await showApp(); else showLogin();
+  // Check if token is still valid before showing app
+  if (Auth.isLoggedIn()) {
+    const user = await Auth.refreshUser();
+    if (user) return await showApp();
+    // Token expired, fall through to login
+  }
+  showLogin();
 }
 
 function bindAuth() {
+  // Login form
   $('#login-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     $('#login-error').textContent = '';
-    const ok = await Auth.login($('#username').value.trim(), $('#password').value);
-    if (ok) await showApp();
-    else $('#login-error').textContent = '用户名或密码错误';
+    const uname = $('#username').value.trim();
+    const pwd = $('#password').value;
+    if (!uname || !pwd) { $('#login-error').textContent = '请输入用户名和密码'; return; }
+    showLoading('登录中...');
+    const result = await Auth.login(uname, pwd);
+    hideLoading();
+    if (result.ok) await showApp();
+    else if (result.error.includes('激活')) {
+      $('#login-error').textContent = '账号未激活，请联系管理员';
+      $('#session-warning').textContent = '需要管理员在「用户管理」中激活你的账号才能登录。';
+      $('#session-warning').classList.remove('hidden');
+    } else {
+      $('#login-error').textContent = result.error;
+    }
   });
   $('#username').oninput = () => $('#login-error').textContent = '';
   $('#password').oninput = () => $('#login-error').textContent = '';
-  $('#logout-btn').addEventListener('click', () => { Auth.logout(); showLogin(); });
+
+  // Register form
+  $('#register-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    $('#register-error').textContent = '';
+    const uname = $('#reg-username').value.trim();
+    const pwd = $('#reg-password').value;
+    const email = $('#reg-email').value.trim();
+    if (uname.length < 2) { $('#register-error').textContent = '用户名至少 2 个字符'; return; }
+    if (pwd.length < 4) { $('#register-error').textContent = '密码至少 4 个字符'; return; }
+    showLoading('注册中...');
+    const result = await Auth.register(uname, pwd, email);
+    hideLoading();
+    if (result.ok) {
+      if (result.user && result.user.active) {
+        // Auto-login if activated (first user / admin)
+        toast('注册成功，已自动登录');
+        await showApp();
+      } else {
+        // Requires admin activation
+        toast('注册成功！等待管理员激活后即可登录');
+        // Stay on login
+        $('#register-error').textContent = '';
+        $('#show-login').click();
+      }
+    } else {
+      $('#register-error').textContent = result.error;
+    }
+  });
+
+  // Toggle login / register cards
+  $('#show-register').onclick = (e) => { e.preventDefault(); showRegisterCard(); };
+  $('#show-login').onclick = (e) => { e.preventDefault(); showLoginCard(); };
+
+  $('#logout-btn').addEventListener('click', async () => {
+    await Auth.logout();
+    showLogin();
+  });
+}
+
+function showRegisterCard() {
+  $('#login-card').classList.add('hidden');
+  $('#register-card').classList.remove('hidden');
+  $('#login-error').textContent = '';
+  $('#register-error').textContent = '';
+  $('#session-warning').classList.add('hidden');
+}
+
+function showLoginCard() {
+  $('#register-card').classList.add('hidden');
+  $('#login-card').classList.remove('hidden');
+  $('#login-error').textContent = '';
+  $('#register-error').textContent = '';
 }
 
 async function showApp() {
-  $('#login-screen').classList.add('hidden'); $('#app').classList.remove('hidden');
+  $('#login-screen').classList.add('hidden');
+  $('#app').classList.remove('hidden');
   await db.init();
-  // session expiry warning
+
+  // Show admin-only nav button
+  const user = Auth.getUser();
+  $$('.admin-only').forEach(el => el.classList.toggle('hidden', !Auth.isAdmin()));
+
+  // User badge
+  $('#user-badge').innerHTML = user ? `<span style="font-size:13px;color:var(--muted)">${user.username}${user.role === 'admin' ? ' 🔑' : ''}</span>` : '';
+
+  // Session expiry warning
   try {
     const s = JSON.parse(localStorage.getItem('learning_tracker_session') || 'null');
     if (s && s.expiresAt) {
       const daysLeft = (s.expiresAt - Date.now()) / 86400000;
-      const sw = $('#session-warning');
-      if (daysLeft < 0) { sw.textContent = '会话已过期，请重新登录。'; sw.classList.remove('hidden'); }
-      else if (daysLeft < 1) { sw.textContent = `会话将在 ${Math.round(daysLeft * 24)} 小时后过期，到期需重新登录。`; sw.classList.remove('hidden'); }
+      if (daysLeft < 0) { toast('会话已过期，请重新登录。'); }
     }
   } catch(e) {}
-  bindApp(); render();
+  bindApp();
+  render();
 }
-function showLogin() { $('#app').classList.add('hidden'); $('#login-screen').classList.remove('hidden'); }
+
+function showLogin() {
+  $('#app').classList.add('hidden');
+  $('#login-screen').classList.remove('hidden');
+  showLoginCard();
+  // Clear sensitive fields
+  $('#password').value = '';
+  $('#reg-password').value = '';
+}
 
 function bindApp() {
   $$('.nav-btn').forEach(btn => btn.onclick = () => switchView(btn.dataset.view));
@@ -101,6 +187,25 @@ function bindApp() {
     e.preventDefault();
     await db.createLog({ planId: $('#log-plan-id').value, taskId: $('#log-task-id').value, summary: $('#log-summary').value, durationMinutes: $('#log-duration').value, notes: $('#log-notes').value });
     e.target.reset(); $('#log-dialog').close(); toast('学习日志已保存到 SQLite'); render();
+  };
+  // User management dialog
+  $('#cancel-edit-user').onclick = () => $('#edit-user-dialog').close();
+  $('#edit-user-form').onsubmit = async (e) => {
+    e.preventDefault();
+    const uid = $('#edit-user-id').value;
+    const body = {
+      username: $('#edit-user-username').value.trim(),
+      email: $('#edit-user-email').value.trim(),
+      role: $('#edit-user-role').value,
+    };
+    const pw = $('#edit-user-password').value;
+    if (pw) body.password = pw;
+    showLoading('保存中...');
+    const res = await Auth.updateUser(uid, body);
+    hideLoading();
+    $('#edit-user-dialog').close();
+    if (res.ok) { toast('用户已更新'); render(); }
+    else toast(res.error || '更新失败');
   };
 }
 
@@ -163,16 +268,17 @@ function switchView(view) {
 function showOnly(id) { $$('.view').forEach(v => v.classList.add('hidden')); $(id).classList.remove('hidden'); }
 
 function render() {
+  $('#back-to-top').classList.add('hidden');
   if (currentView === 'dashboard') return renderDashboard();
   if (currentView === 'plans') return renderPlans();
   if (currentView === 'detail') return renderPlanDetail();
   if (currentView === 'logs') return renderLogs();
+  if (currentView === 'users') return renderUsers();
   if (currentView === 'data') return renderData();
 }
 
 function renderDashboard() {
   showOnly('#dashboard-view'); $('#view-title').textContent = '仪表盘'; $('#view-subtitle').textContent = '学习数据来自浏览器 SQLite 数据库';
-  $('#back-to-top').classList.add('hidden');
   const stats = db.getStats(); const plans = db.getPlans(); const logs = db.getLogs().slice(0, 6);
   const emptyPlans = plans.length === 0 ? '<div class="empty-state"><p>还没有学习计划，从链接生成或手动创建</p><button class="hollow" id="empty-new-plan">+ 从链接生成计划</button></div>' : '';
   $('#dashboard-view').innerHTML = `
@@ -239,7 +345,6 @@ function editPlanDialog(planId) {
 
 function renderPlans() {
   showOnly('#plans-view'); $('#view-title').textContent = '学习计划'; $('#view-subtitle').textContent = '搜索、筛选、进入详情跟踪任务';
-  $('#back-to-top').classList.add('hidden');
   const plans = db.getPlans();
   $('#plans-view').innerHTML = `<div class="toolbar"><input id="search" placeholder="搜索标题/分类/链接" /><select id="status-filter"><option value="">全部状态</option><option value="not_started">未开始</option><option value="in_progress">进行中</option><option value="completed">已完成</option></select></div><div id="plans-list" class="plans-list"></div>`;
   const draw = () => {
@@ -255,7 +360,6 @@ function renderPlanDetail() {
   const plan = db.getPlan(currentPlanId); if (!plan) { currentPlanId = null; return renderPlans(); }
   showOnly('#plan-detail-view'); $('#view-title').textContent = plan.title; $('#view-subtitle').textContent = plan.source_url || '计划详情';
   $('#back-to-top').classList.remove('hidden');
-  // scroll listener for back-to-top
   const scroller = document.querySelector('.workspace');
   const bttHandler = () => {
     if (!currentPlanId || currentView !== 'detail') return;
@@ -376,7 +480,7 @@ function taskCard(t) {
 function bindTaskButtons() {
   $$('[data-task-log]').forEach(b => b.onclick = () => { $('#log-plan-id').value = currentPlanId; $('#log-task-id').value = b.dataset.taskLog; $('#log-dialog').showModal(); });
   $$('[data-task-progress]').forEach(slider => {
-    // already handled by enhanced slider binding in bindTaskButtons()
+    // already handled by enhanced slider binding
   });
   $$('[data-task-logs-toggle]').forEach(b => b.onclick = () => {
     const safeId = b.dataset.taskLogsToggle.replace(/[^a-zA-Z0-9]/g,'_');
@@ -415,7 +519,6 @@ function bindTaskButtons() {
         valSpan.textContent = val + '%';
         valSpan.className = 'slider-val ' + pctClass(val);
       }
-      // update progress bar color
       const taskEl = slider.closest('.task');
       if (taskEl) {
         const bar = taskEl.querySelector('.progress');
@@ -454,6 +557,123 @@ function bindLogNav() {
     if (planId) { currentPlanId = planId; currentView = 'detail'; render(); }
   });
 }
+
+// ---- User Management (admin only) ----
+
+function renderUsers() {
+  showOnly('#users-view'); $('#view-title').textContent = '用户管理'; $('#view-subtitle').textContent = '管理所有注册用户（仅管理员可见）';
+  if (!Auth.isAdmin()) {
+    $('#users-view').innerHTML = '<div class="panel"><p class="muted">仅管理员可访问此页面</p></div>';
+    return;
+  }
+  showLoading('加载用户列表...');
+  Auth.listUsers().then(res => {
+    hideLoading();
+    if (!res.ok) {
+      $('#users-view').innerHTML = `<div class="panel"><p class="muted">${res.error || '加载失败'}</p></div>`;
+      return;
+    }
+    const users = res.users || [];
+    $('#users-view').innerHTML = `
+      <section class="panel">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+          <h3>用户列表（${users.length}）</h3>
+        </div>
+        <div style="overflow-x:auto">
+          <table style="width:100%;border-collapse:collapse;font-size:14px">
+            <thead><tr style="border-bottom:1px solid var(--line)">
+              <th style="text-align:left;padding:8px;color:var(--muted)">用户名</th>
+              <th style="text-align:left;padding:8px;color:var(--muted)">邮箱</th>
+              <th style="text-align:left;padding:8px;color:var(--muted)">角色</th>
+              <th style="text-align:center;padding:8px;color:var(--muted)">状态</th>
+              <th style="text-align:left;padding:8px;color:var(--muted)">注册时间</th>
+              <th style="text-align:right;padding:8px;color:var(--muted)">操作</th>
+            </tr></thead>
+            <tbody>${users.map(userRow).join('')}</tbody>
+          </table>
+        </div>
+      </section>`;
+    bindUserActions();
+  }).catch(() => {
+    hideLoading();
+    $('#users-view').innerHTML = '<div class="panel"><p class="muted">加载失败</p></div>';
+  });
+}
+
+function userRow(u) {
+  const activeLabel = u.active ? '已激活' : '已禁用';
+  const activeCls = u.active ? 'pct-high' : 'pct-low';
+  const canToggle = !(u.role === 'admin' && u.active); // don't allow deactivating active admin
+  return `<tr style="border-bottom:1px solid var(--line)">
+    <td style="padding:8px"><b>${u.username}</b></td>
+    <td style="padding:8px;color:var(--muted)">${u.email || '-'}</td>
+    <td style="padding:8px">${u.role === 'admin' ? '🔑 管理员' : '普通用户'}</td>
+    <td style="text-align:center;padding:8px"><span class="${activeCls}">● ${activeLabel}</span></td>
+    <td style="padding:8px;color:var(--muted);font-size:13px">${(u.created_at || '').slice(0,10)}</td>
+    <td style="text-align:right;padding:8px">
+      <button class="ghost-sm" data-edit-user="${u.id}" title="编辑">编辑</button>
+      ${u.active ? `<button class="ghost-sm" data-deactivate-user="${u.id}" title="禁用" ${u.role === 'admin' ? 'disabled' : ''}>禁用</button>`
+                 : `<button class="ghost-sm" data-activate-user="${u.id}" title="激活" style="color:var(--ok)">激活</button>`}
+      ${u.role !== 'admin' ? `<button class="ghost-sm danger" data-delete-user="${u.id}" title="删除">删除</button>` : ''}
+    </td>
+  </tr>`;
+}
+
+function bindUserActions() {
+  // Edit user
+  $$('[data-edit-user]').forEach(b => b.onclick = async () => {
+    const users = (await Auth.listUsers()).users || [];
+    const u = users.find(x => x.id === b.dataset.editUser);
+    if (!u) return;
+    $('#edit-user-id').value = u.id;
+    $('#edit-user-username').value = u.username;
+    $('#edit-user-email').value = u.email || '';
+    $('#edit-user-role').value = u.role;
+    $('#edit-user-password').value = '';
+    $('#edit-user-dialog').showModal();
+  });
+
+  // Activate user
+  $$('[data-activate-user]').forEach(b => b.onclick = async () => {
+    showLoading('激活中...');
+    const res = await Auth.activateUser(b.dataset.activateUser);
+    hideLoading();
+    toast(res.ok ? '用户已激活' : (res.error || '操作失败'));
+    render();
+  });
+
+  // Deactivate user
+  $$('[data-deactivate-user]').forEach(b => b.onclick = () => {
+    const uid = b.dataset.deactivateUser;
+    $('#confirm-msg').textContent = '确认禁用此用户？该用户将无法登录系统。';
+    $('#confirm-action').onclick = async () => {
+      showLoading('禁用中...');
+      const res = await Auth.deactivateUser(uid);
+      hideLoading();
+      $('#confirm-dialog').close();
+      toast(res.ok ? '用户已禁用' : (res.error || '操作失败'));
+      render();
+    };
+    $('#confirm-dialog').showModal();
+  });
+
+  // Delete user
+  $$('[data-delete-user]').forEach(b => b.onclick = () => {
+    const uid = b.dataset.deleteUser;
+    $('#confirm-msg').textContent = '确认删除此用户？不可恢复。';
+    $('#confirm-action').onclick = async () => {
+      showLoading('删除中...');
+      const res = await Auth.deleteUser(uid);
+      hideLoading();
+      $('#confirm-dialog').close();
+      toast(res.ok ? '用户已删除' : (res.error || '操作失败'));
+      render();
+    };
+    $('#confirm-dialog').showModal();
+  });
+}
+
+// ---- Data Management ----
 
 function renderData() {
   showOnly('#data-view'); $('#view-title').textContent = '数据管理'; $('#view-subtitle').textContent = 'SQLite .db 文件导入导出，业务数据不使用实时数据库';
