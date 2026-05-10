@@ -4,65 +4,159 @@
 
 ## 登录
 
-- 用户名：`admin`
-- 密码：`admin`
+- Learning Tracker 用户名：`admin`
+- Learning Tracker 密码：`admin`
+- AI Hub 管理后台默认用户名：`admin`
+- AI Hub 管理后台默认密码：`admin`
 
 ## 功能
 
 - 从学习链接自动生成学习计划
-- AI 深度分析学习链接：后端读取 GitHub README / 网页标题与目录，可调用 OpenAI-compatible API 生成更贴合内容的阶段目标、任务和验收标准
-- 后端未配置 AI Key 时自动降级为目录/标题启发式生成
+- AI 深度分析学习链接：通过独立 `AI Analysis Hub` 管理 Provider / Model / API Key，并由 `learning-tracker` 通过 Docker 内网调用
+- 后端未配置 AI Hub 或 AI Hub 不可用时，自动降级为 GitHub README / 网页目录启发式生成
 - 阶段 / 任务 / 进度 / 学习日志跟踪
 - 仪表盘统计：计划数、完成数、平均进度、学习时长
 - 搜索、状态筛选
 - SQLite `.db` 导入 / 导出备份
 - 响应式深色 UI
-- Docker + GitHub Actions 云服务器部署
+- Docker Compose 双服务部署
 
-## 本地运行
+## 架构
 
-```bash
-python3 server/server.py
-open http://127.0.0.1:8010/
+```text
+浏览器
+  ↓
+learning-tracker :8010
+  ↓ Docker 内网 HTTP
+ai-hub :8020
+  ↓ OpenAI-compatible API
+OpenCode Go / DeepSeek / OpenAI / Kimi / Qwen
 ```
 
-可选 AI 配置：
+`learning-tracker` 不再直接保存第三方模型 Key；所有 Key 通过 `AI Hub` 后台写入 SQLite，并用 `AI_HUB_MASTER_KEY` 加密。
+
+## 本地 Docker 运行
 
 ```bash
-export OPENAI_BASE_URL="https://api.openai.com/v1"   # 或其他 OpenAI-compatible endpoint
-export OPENAI_MODEL="gpt-4o-mini"
-export OPENAI_API_KEY="你的 key"
-# 也支持 DEEPSEEK_API_KEY，默认模型 deepseek-chat
-python3 server/server.py
+cp .env.example .env
+# 建议修改 .env 里的 token/master key
+docker compose up -d --build
 ```
 
-如果不配置 Key，`/api/analyze-link` 会抓取链接标题、GitHub README 和目录结构，使用本地启发式算法生成计划。
+访问：
 
-## Docker
+```text
+Learning Tracker: http://127.0.0.1:8010/
+AI Hub Admin:    http://127.0.0.1:8020/
+```
+
+## AI Hub 配置 OpenCode Go
+
+1. 打开 `http://127.0.0.1:8020/`
+2. 登录 `admin / admin`
+3. 在 Provider 页面添加：
+
+```text
+名称：OpenCode Go
+Base URL：https://opencode.ai/zen/go/v1
+API Key：你的 OpenCode Go API Key
+启用：是
+```
+
+4. 在 Model 页面添加：
+
+```text
+Provider：OpenCode Go
+模型 ID：deepseek-v4-pro
+显示名称：DeepSeek V4 Pro
+用途：learning_plan
+默认：是
+```
+
+5. 回到“配置引导”页面点击“测试默认模型”，返回 `pong` 即成功。
+
+可选模型：
+
+```text
+deepseek-v4-flash
+deepseek-v4-pro
+glm-5
+glm-5.1
+kimi-k2.5
+kimi-k2.6
+mimo-v2.5
+mimo-v2.5-pro
+minimax-m2.5
+minimax-m2.7
+qwen3.5-plus
+qwen3.6-plus
+```
+
+## 内网 API
+
+`learning-tracker` 通过以下环境变量接入：
+
+```yaml
+environment:
+  AI_HUB_URL: http://ai-hub:8020
+  AI_HUB_TOKEN: ${AI_HUB_INTERNAL_TOKEN}
+```
+
+手动测试：
 
 ```bash
-docker build -t learning-tracker:local .
-docker run --rm -p 8010:8010 learning-tracker:local
+curl -X POST http://127.0.0.1:8020/api/v1/analyze-learning-link \
+  -H "Authorization: Bearer $AI_HUB_INTERNAL_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "clientName":"learning-tracker",
+    "url":"https://github.com/yt-huang/learning-tracker",
+    "goal":"学习这个项目的架构和实现",
+    "level":"进阶",
+    "hoursPerWeek":5
+  }'
 ```
 
 ## 数据说明
 
-业务数据表：
+Learning Tracker 业务数据表：
 
 - `plans`
 - `milestones`
 - `tasks`
 - `logs`
 
-每次新增/修改/删除都会写入 SQLite，并立即 `db.export()` 保存到 IndexedDB。只有登录 session 使用 localStorage。
+每次新增/修改/删除都会写入浏览器内 SQLite，并立即 `db.export()` 保存到 IndexedDB。只有登录 session 使用 localStorage。
+
+AI Hub 数据库：
+
+```text
+Docker volume: ai_hub_data
+SQLite path: /data/ai_hub.db
+```
+
+包含：
+
+- `providers`
+- `models`
+- `call_logs`
 
 ## 部署
 
-GitHub Actions 会构建镜像并推送到：
+GitHub Actions 会构建两个镜像并推送到：
 
 ```text
 ghcr.io/yt-huang/learning-tracker:latest
+ghcr.io/yt-huang/learning-tracker-ai-hub:latest
 ```
 
-云服务器默认路径：`/opt/learning-tracker`  
-公网端口：`8010`
+云服务器默认路径：`/opt/learning-tracker`
+
+公网端口：
+
+```text
+Learning Tracker: 8010
+AI Hub Admin:    8020
+```
+
+> 生产建议：AI Hub 管理后台只允许可信 IP 访问，或者放到内网/反向代理认证之后。

@@ -180,6 +180,34 @@ def extract_json(text: str) -> dict:
         raise
 
 
+def call_ai_hub(url: str, goal: str, level: str, hours_per_week: int) -> dict | None:
+    hub_url = os.getenv("AI_HUB_URL", "").strip().rstrip("/")
+    hub_token = os.getenv("AI_HUB_TOKEN", "").strip()
+    if not hub_url or not hub_token:
+        return None
+    body = {
+        "clientName": "learning-tracker",
+        "template": "learning_plan",
+        "url": url,
+        "goal": goal,
+        "level": level,
+        "hoursPerWeek": hours_per_week,
+    }
+    req = urllib.request.Request(
+        hub_url + "/api/v1/analyze-learning-link",
+        data=json.dumps(body).encode("utf-8"),
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {hub_token}"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=90) as resp:
+        payload = json.loads(resp.read().decode("utf-8"))
+    plan = payload.get("plan")
+    if isinstance(plan, dict):
+        plan.setdefault("analysisSummary", f"由 AI Hub 内网服务生成：{payload.get('provider', '')}/{payload.get('model', '')}")
+        return plan
+    return None
+
+
 def call_ai(ctx: dict, goal: str, level: str, hours_per_week: int) -> dict | None:
     api_key = os.getenv("OPENAI_API_KEY") or os.getenv("DEEPSEEK_API_KEY") or os.getenv("AI_API_KEY")
     if not api_key:
@@ -285,6 +313,14 @@ class Handler(SimpleHTTPRequestHandler):
             goal = str(payload.get("goal") or "").strip()
             level = str(payload.get("level") or "进阶").strip()
             hours = int(payload.get("hoursPerWeek") or 5)
+            try:
+                hub_plan = call_ai_hub(url, goal, level, hours)
+            except Exception as hub_error:
+                print(f"AI Hub unavailable, fallback to local analyzer: {hub_error}", file=sys.stderr, flush=True)
+                hub_plan = None
+            if hub_plan:
+                plan = normalize_plan(hub_plan, url)
+                return self.send_json(200, {"ok": True, "plan": plan, "fetched": {"kind": "ai-hub", "title": plan.get("title"), "headings": []}})
             ctx = collect_link_context(url)
             plan = call_ai(ctx, goal, level, hours) or fallback_plan(ctx, goal, level, hours)
             plan = normalize_plan(plan, url)

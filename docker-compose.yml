@@ -1,14 +1,41 @@
 services:
   learning-tracker:
+    build: .
     image: ghcr.io/yt-huang/learning-tracker:latest
     container_name: learning-tracker
     restart: unless-stopped
+    depends_on:
+      ai-hub:
+        condition: service_started
     ports:
       - "8010:8010"
     environment:
       PORT: "8010"
-      # Optional OpenAI-compatible AI config. Without a key, backend falls back to heading-based analysis.
+      AI_HUB_URL: http://ai-hub:8020
+      AI_HUB_TOKEN: ${AI_HUB_INTERNAL_TOKEN:-dev-internal-token}
+      # Legacy direct-provider fallback. Normally leave empty; configure keys in AI Hub admin instead.
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+
+  ai-hub:
+    build: ./ai-hub
+    image: ghcr.io/yt-huang/learning-tracker-ai-hub:latest
+    container_name: ai-analysis-hub
+    restart: unless-stopped
+    ports:
+      - "8020:8020"
+    environment:
+      PORT: "8020"
+      DB_PATH: /data/ai_hub.db
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
+      AI_HUB_ADMIN_TOKEN: ${AI_HUB_ADMIN_TOKEN:-dev-admin-token}
+      AI_HUB_INTERNAL_TOKEN: ${AI_HUB_INTERNAL_TOKEN:-dev-internal-token}
+      AI_HUB_MASTER_KEY: ${AI_HUB_MASTER_KEY:-dev-master-key-change-me}
+    volumes:
+      - ai_hub_data:/data
+
+volumes:
+  ai_hub_data:
