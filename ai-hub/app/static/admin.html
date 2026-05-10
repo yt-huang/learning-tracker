@@ -41,7 +41,7 @@
           <li>Base URL 填：<code>https://opencode.ai/zen/go/v1</code></li>
           <li>API Key 填 OpenCode Go 的 Key，保存后不会明文展示。</li>
           <li>添加模型：<code>deepseek-v4-pro</code>，勾选默认模型。</li>
-          <li>点击“测试默认模型”，返回 pong 即配置成功。</li>
+          <li>点击"测试默认模型"，返回 pong 即配置成功。</li>
         </ol>
         <h3>Docker Compose 内网调用</h3>
         <pre>learning-tracker:
@@ -58,28 +58,44 @@
       </section>
 
       <section id="providers" class="panel">
-        <h2>Provider 管理</h2>
+        <h2 id="formProviderTitle">Provider 管理</h2>
         <div class="form-row">
           <input id="pName" placeholder="名称，例如 OpenCode Go" />
           <input id="pBase" placeholder="Base URL，例如 https://opencode.ai/zen/go/v1" />
           <input id="pKey" placeholder="API Key" type="password" />
+          <input id="pProxy" placeholder="代理地址（可选），例如 http://127.0.0.1:7890" />
           <label><input id="pEnabled" type="checkbox" checked /> 启用</label>
-          <button id="addProviderBtn">保存 Provider</button>
+          <div class="flex gap-8">
+            <button id="addProviderBtn">保存 Provider</button>
+            <button id="pCancelEdit" class="ghost hidden">取消</button>
+          </div>
         </div>
         <div id="providerList" class="list"></div>
       </section>
 
       <section id="models" class="panel">
-        <h2>Model 管理</h2>
+        <h2 id="formModelTitle">Model 管理</h2>
         <div class="form-row">
           <select id="mProvider"></select>
           <input id="mId" placeholder="模型 ID，例如 deepseek-v4-pro" />
           <input id="mName" placeholder="显示名称" />
           <input id="mPurpose" placeholder="用途" value="learning_plan" />
           <label><input id="mDefault" type="checkbox" /> 默认</label>
-          <button id="addModelBtn">保存 Model</button>
+          <div class="flex gap-8">
+            <button id="addModelBtn">保存 Model</button>
+            <button id="mCancelEdit" class="ghost hidden">取消</button>
+          </div>
         </div>
         <div id="modelList" class="list"></div>
+
+        <h3 class="mt-8">从 API 拉取模型</h3>
+        <div class="form-row">
+          <select id="mProviderFetch"></select>
+          <button id="fetchModelsBtn">从 API 拉取模型</button>
+        </div>
+        <div id="fetchResultPanel" class="hidden">
+          <div id="fetchResult"></div>
+        </div>
       </section>
 
       <section id="logs" class="panel">

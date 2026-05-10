@@ -15,6 +15,7 @@ ADMIN_TOKEN = os.getenv("AI_HUB_ADMIN_TOKEN", "dev-admin-token")
 INTERNAL_TOKEN = os.getenv("AI_HUB_INTERNAL_TOKEN", "dev-internal-token")
 MASTER_KEY = os.getenv("AI_HUB_MASTER_KEY", "dev-master-key-change-me")
 MAX_CONTENT_CHARS = 14000
+HTTP_TIMEOUT = int(os.getenv("HTTP_TIMEOUT", "30"))
 
 
 def now(): return datetime.utcnow().isoformat()
@@ -34,6 +35,7 @@ def init_db():
           name TEXT UNIQUE NOT NULL,
           base_url TEXT NOT NULL,
           api_key_encrypted TEXT NOT NULL,
+          proxy TEXT DEFAULT '',
           enabled INTEGER NOT NULL DEFAULT 1,
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL
@@ -60,9 +62,16 @@ def init_db():
           success INTEGER DEFAULT 0,
           latency_ms INTEGER DEFAULT 0,
           error_message TEXT DEFAULT '',
+          error_detail TEXT DEFAULT '',
           created_at TEXT NOT NULL
         );
         ''')
+        # Migrate: add proxy column if missing in existing table
+        try: con.execute('ALTER TABLE providers ADD COLUMN proxy TEXT DEFAULT \"\"')
+        except sqlite3.OperationalError: pass
+        # Migrate: add error_detail column if missing
+        try: con.execute('ALTER TABLE call_logs ADD COLUMN error_detail TEXT DEFAULT \"\"')
+        except sqlite3.OperationalError: pass
 
 
 def keystream(n:int)->bytes:
@@ -95,9 +104,17 @@ def require_internal(handler):
     return True
 
 
-def fetch_url(url, timeout=20):
+def build_opener(proxy=''):
+    """Build urllib opener with optional proxy support."""
+    if proxy:
+        handler = urllib.request.ProxyHandler({'http': proxy, 'https': proxy})
+        return urllib.request.build_opener(handler)
+    return urllib.request.build_opener()
+
+def fetch_url(url, timeout=45, proxy=''):
+    opener = build_opener(proxy)
     req=urllib.request.Request(url,headers={'User-Agent':'AIAnalysisHub/0.1','Accept':'text/html,text/markdown,text/plain,application/json,*/*;q=0.5'})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    with opener.open(req, timeout=timeout) as resp:
         ctype=resp.headers.get('content-type',''); raw=resp.read(512_000)
     enc='utf-8'; m=re.search(r'charset=([^;]+)',ctype,re.I)
     if m: enc=m.group(1).strip()
@@ -124,18 +141,18 @@ def html_to_text(markup):
     text=html.unescape(re.sub(r'\s+',' ',re.sub(r'<[^>]+>',' ',text))).strip()
     return text, headings[:24], title
 
-def collect_context(url):
+def collect_context(url, proxy=''):
     parsed=urllib.parse.urlparse(url)
     if parsed.netloc.lower() in {'github.com','www.github.com'}:
         parts=[p for p in parsed.path.split('/') if p]
         if len(parts)>=2:
             owner,repo=parts[0],parts[1]; meta={}; readme=''
             try:
-                d,_=fetch_url(f'https://api.github.com/repos/{owner}/{repo}'); meta=json.loads(d)
-                r,_=fetch_url(f'https://api.github.com/repos/{owner}/{repo}/readme'); readme=base64.b64decode(json.loads(r).get('content','')).decode('utf-8',errors='replace')
+                d,_=fetch_url(f'https://api.github.com/repos/{owner}/{repo}', proxy=proxy); meta=json.loads(d)
+                r,_=fetch_url(f'https://api.github.com/repos/{owner}/{repo}/readme', proxy=proxy); readme=base64.b64decode(json.loads(r).get('content','')).decode('utf-8',errors='replace')
             except Exception: pass
             return {'kind':'github','url':url,'title':f'{owner}/{repo}','description':meta.get('description') or '', 'topics':meta.get('topics') or [], 'language':meta.get('language') or '', 'stars':meta.get('stargazers_count') or 0, 'headings':markdown_headings(readme), 'content':readme[:MAX_CONTENT_CHARS]}
-    data,ctype=fetch_url(url)
+    data,ctype=fetch_url(url, proxy=proxy)
     if 'html' in ctype.lower() or '<html' in data[:500].lower(): text,headings,title=html_to_text(data)
     else: text,headings,title=data,markdown_headings(data),parsed.netloc
     return {'kind':'web','url':url,'title':title or parsed.netloc,'description':'','topics':[],'language':'','stars':0,'headings':headings,'content':text[:MAX_CONTENT_CHARS]}
@@ -151,12 +168,13 @@ def select_model(con):
     if not row: raise RuntimeError('请先在 AI Hub 后台配置并启用 Provider 和 Model')
     return dict(row)
 
-def call_model(m, ctx, data):
+def call_model(m, ctx, data, proxy=''):
     key=decrypt_secret(m['api_key_encrypted'])
-    prompt=f'''你是学习规划专家和产品经理。根据链接内容生成适合 Learning Tracker 的学习计划。\n只输出 JSON，不要 Markdown。字段：title, sourceUrl, description, category, difficulty, estimatedHours, analysisSummary, milestones。\nmilestones 每项字段：title, description, goal, tasks。tasks 每项字段：title, description, estimatedMinutes, acceptance。\n要求：4-6 个阶段，每阶段 3-5 个具体可执行任务，可记录学习日志。\n用户目标：{data.get('goal') or '未填写'}\n用户水平：{data.get('level') or '进阶'}\n每周可投入小时：{data.get('hoursPerWeek') or 5}\n链接上下文：{json.dumps(ctx, ensure_ascii=False)[:MAX_CONTENT_CHARS]}'''
+    prompt=f'''你是学习规划专家和产品经理。根据链接内容生成适合 Learning Tracker 的学习计划。\n只输出 JSON，不要 Markdown。字段：title, sourceUrl, description, category, difficulty, estimatedHours, analysisSummary, milestones。\nmilestones 每项字段：title, description, goal, tasks。tasks 每项字段：title, description, estimatedMinutes, acceptance。\n要求：4-6 个阶段，每阶段 3-5 个具体可执行任务，可学习日志。\n用户目标：{data.get('goal') or '未填写'}\n用户水平：{data.get('level') or '进阶'}\n每周可投入小时：{data.get('hoursPerWeek') or 5}\n链接上下文：{json.dumps(ctx, ensure_ascii=False)[:MAX_CONTENT_CHARS]}'''
     body={'model':m['model_id'],'messages':[{'role':'system','content':'You output strict JSON only.'},{'role':'user','content':prompt}], 'temperature':float(m['temperature'] or 0.3),'response_format':{'type':'json_object'}}
+    opener = build_opener(proxy)
     req=urllib.request.Request(m['base_url'].rstrip('/')+'/chat/completions',data=json.dumps(body).encode(),headers={'Content-Type':'application/json','Authorization':f'Bearer {key}'},method='POST')
-    with urllib.request.urlopen(req,timeout=90) as resp: payload=json.loads(resp.read().decode())
+    with opener.open(req,timeout=HTTP_TIMEOUT) as resp: payload=json.loads(resp.read().decode())
     plan=extract_json(payload['choices'][0]['message']['content']); plan['aiUsed']=True
     plan.setdefault('analysisSummary',f"由 AI Hub 使用 {m['provider_name']}/{m['model_id']} 生成。")
     return plan
@@ -175,11 +193,11 @@ class Handler(SimpleHTTPRequestHandler):
             if not require_admin(self): return
             with db() as con:
                 if self.path=='/api/admin/providers':
-                    rows=con.execute('select * from providers order by id desc').fetchall(); return self.send_json(200, {'items':[{'id':r['id'],'name':r['name'],'baseUrl':r['base_url'],'apiKeyMasked':'********' if r['api_key_encrypted'] else '', 'enabled':bool(r['enabled']),'createdAt':r['created_at'],'updatedAt':r['updated_at']} for r in rows]})
+                    rows=con.execute('select * from providers order by id desc').fetchall(); return self.send_json(200, {'items':[dict(id=r['id'],name=r['name'],baseUrl=r['base_url'],apiKeyMasked='********' if r['api_key_encrypted'] else '', proxy=r['proxy'] or '', enabled=bool(r['enabled']),createdAt=r['created_at'],updatedAt=r['updated_at']) for r in rows]})
                 if self.path=='/api/admin/models':
-                    rows=con.execute('select m.*,p.name provider_name from models m join providers p on p.id=m.provider_id order by m.is_default desc,m.id desc').fetchall(); return self.send_json(200, {'items':[{'id':r['id'],'providerId':r['provider_id'],'providerName':r['provider_name'],'modelId':r['model_id'],'displayName':r['display_name'],'purpose':r['purpose'],'temperature':r['temperature'],'maxTokens':r['max_tokens'],'isDefault':bool(r['is_default']),'enabled':bool(r['enabled'])} for r in rows]})
+                    rows=con.execute('select m.*,p.name provider_name from models m join providers p on p.id=m.provider_id order by m.is_default desc,m.id desc').fetchall(); return self.send_json(200, {'items':[dict(id=r['id'],providerId=r['provider_id'],providerName=r['provider_name'],modelId=r['model_id'],displayName=r['display_name'],purpose=r['purpose'],temperature=r['temperature'],maxTokens=r['max_tokens'],isDefault=bool(r['is_default']),enabled=bool(r['enabled'])) for r in rows]})
                 if self.path=='/api/admin/logs':
-                    rows=con.execute('select * from call_logs order by id desc limit 80').fetchall(); return self.send_json(200, {'items':[{'id':r['id'],'clientName':r['client_name'],'template':r['template'],'provider':r['provider_name'],'model':r['model_id'],'success':bool(r['success']),'latencyMs':r['latency_ms'],'error':r['error_message'],'createdAt':r['created_at']} for r in rows]})
+                    rows=con.execute('select * from call_logs order by id desc limit 80').fetchall(); return self.send_json(200, {'items':[dict(id=r['id'],clientName=r['client_name'],template=r['template'],provider=r['provider_name'],model=r['model_id'],success=bool(r['success']),latencyMs=r['latency_ms'],error=r['error_message'],errorDetail=r['error_detail'] or '',createdAt=r['created_at']) for r in rows]})
         return super().do_GET()
     def do_POST(self):
         try:
@@ -189,38 +207,163 @@ class Handler(SimpleHTTPRequestHandler):
             if self.path=='/api/admin/providers':
                 if not require_admin(self): return
                 d=read_json(self); t=now()
-                with db() as con:
-                    cur=con.execute('insert into providers(name,base_url,api_key_encrypted,enabled,created_at,updated_at) values(?,?,?,?,?,?)',(d['name'].strip(),d['baseUrl'].strip().rstrip('/'),encrypt_secret(d.get('apiKey','').strip()),1 if d.get('enabled',True) else 0,t,t)); con.commit()
-                    return self.send_json(200, {'id':cur.lastrowid,'name':d['name'],'baseUrl':d['baseUrl'],'apiKeyMasked':'********','enabled':d.get('enabled',True),'createdAt':t,'updatedAt':t})
+                name = (d.get('name') or '').strip()
+                base_url = (d.get('baseUrl') or '').strip().rstrip('/')
+                api_key = (d.get('apiKey') or '').strip()
+                if not name: return self.send_json(400, {'error':'名称不能为空'})
+                if not base_url: return self.send_json(400, {'error':'Base URL 不能为空'})
+                if not api_key: return self.send_json(400, {'error':'API Key 不能为空'})
+                proxy = (d.get('proxy') or '').strip()
+                try:
+                    with db() as con:
+                        cur=con.execute('insert into providers(name,base_url,api_key_encrypted,proxy,enabled,created_at,updated_at) values(?,?,?,?,?,?,?)',(name,base_url,encrypt_secret(api_key),proxy,1 if d.get('enabled',True) else 0,t,t)); con.commit()
+                        return self.send_json(200, {'id':cur.lastrowid,'name':name,'baseUrl':base_url,'apiKeyMasked':'********','proxy':proxy,'enabled':d.get('enabled',True),'createdAt':t,'updatedAt':t})
+                except sqlite3.IntegrityError:
+                    return self.send_json(409, {'error':f'Provider "{name}" 已存在'})
             if self.path=='/api/admin/models':
                 if not require_admin(self): return
                 d=read_json(self); t=now()
-                with db() as con:
-                    if d.get('isDefault'): con.execute('update models set is_default=0')
-                    cur=con.execute('insert into models(provider_id,model_id,display_name,purpose,temperature,max_tokens,is_default,enabled,created_at,updated_at) values(?,?,?,?,?,?,?,?,?,?)',(d['providerId'],d['modelId'].strip(),d.get('displayName','').strip(),d.get('purpose','learning_plan'),float(d.get('temperature',0.3)),int(d.get('maxTokens',4096)),1 if d.get('isDefault') else 0,1 if d.get('enabled',True) else 0,t,t)); con.commit()
-                    return self.send_json(200, {'id':cur.lastrowid})
+                model_id = (d.get('modelId') or '').strip()
+                if not model_id: return self.send_json(400, {'error':'模型 ID 不能为空'})
+                if not d.get('providerId'): return self.send_json(400, {'error':'请选择 Provider'})
+                try:
+                    with db() as con:
+                        if d.get('isDefault'): con.execute('update models set is_default=0')
+                        cur=con.execute('insert into models(provider_id,model_id,display_name,purpose,temperature,max_tokens,is_default,enabled,created_at,updated_at) values(?,?,?,?,?,?,?,?,?,?)',(d['providerId'],model_id,d.get('displayName','').strip(),d.get('purpose','learning_plan'),float(d.get('temperature',0.3)),int(d.get('maxTokens',4096)),1 if d.get('isDefault') else 0,1 if d.get('enabled',True) else 0,t,t)); con.commit()
+                        return self.send_json(200, {'id':cur.lastrowid})
+                except sqlite3.IntegrityError:
+                    return self.send_json(409, {'error':'该模型已存在'})
             if self.path=='/api/admin/test-model':
                 if not require_admin(self): return
                 start=time.time()
                 with db() as con: m=select_model(con)
                 key=decrypt_secret(m['api_key_encrypted']); body={'model':m['model_id'],'messages':[{'role':'user','content':'Return exactly: pong'}],'temperature':0}
+                proxy = m.get('proxy') or os.getenv('HTTP_PROXY', '') or os.getenv('HTTPS_PROXY', '')
+                opener = build_opener(proxy)
                 req=urllib.request.Request(m['base_url'].rstrip('/')+'/chat/completions',data=json.dumps(body).encode(),headers={'Content-Type':'application/json','Authorization':f'Bearer {key}'},method='POST')
-                with urllib.request.urlopen(req,timeout=30) as resp: payload=json.loads(resp.read().decode())
+                with opener.open(req,timeout=HTTP_TIMEOUT) as resp: payload=json.loads(resp.read().decode())
                 return self.send_json(200, {'ok':True,'provider':m['provider_name'],'model':m['model_id'],'latencyMs':int((time.time()-start)*1000),'response':payload['choices'][0]['message']['content']})
+            if self.path=='/api/admin/test-connection':
+                if not require_admin(self): return
+                d=read_json(self); pid=d.get('providerId')
+                if not pid: return self.send_json(400, {'error':'providerId 必填'})
+                start=time.time()
+                with db() as con:
+                    row=con.execute('select * from providers where id=?',(pid,)).fetchone()
+                    if not row: return self.send_json(404, {'error':'Provider 未找到'})
+                    m=dict(row)
+                    proxy = m.get('proxy') or os.getenv('HTTP_PROXY', '') or os.getenv('HTTPS_PROXY', '')
+                    try:
+                        data, _ = fetch_url(m['base_url'].rstrip('/')+'/models', timeout=HTTP_TIMEOUT, proxy=proxy)
+                        payload=json.loads(data)
+                        models_list = payload.get('data', []) if isinstance(payload.get('data'), list) else []
+                        return self.send_json(200, {'ok':True,'provider':m['name'],'latencyMs':int((time.time()-start)*1000),'modelCount':len(models_list)})
+                    except urllib.error.URLError as e:
+                        return self.send_json(502, {'ok':False,'error':'无法连接 API，请检查网络或配置代理','detail':str(e.reason)})
+                    except Exception as e:
+                        return self.send_json(502, {'ok':False,'error':f'连接测试失败: {str(e)}'})
+            if self.path=='/api/admin/fetch-models':
+                if not require_admin(self): return
+                d=read_json(self); pid=d.get('providerId')
+                if not pid: return self.send_json(400, {'error':'providerId 必填'})
+                with db() as con:
+                    row=con.execute('select * from providers where id=?',(pid,)).fetchone()
+                    if not row: return self.send_json(404, {'error':'Provider 未找到'})
+                    m=dict(row)
+                    proxy = m.get('proxy') or os.getenv('HTTP_PROXY', '') or os.getenv('HTTPS_PROXY', '')
+                    try:
+                        data, _ = fetch_url(m['base_url'].rstrip('/')+'/models', timeout=HTTP_TIMEOUT, proxy=proxy)
+                        payload=json.loads(data)
+                        models_list = payload.get('data', [])
+                        if not isinstance(models_list, list):
+                            return self.send_json(500, {'error':'API 返回格式异常，未找到模型列表'})
+                        result=[]
+                        for mdl in models_list:
+                            mid = mdl.get('id', '')
+                            if mid:
+                                result.append({'modelId':mid,'displayName':mdl.get('display_name') or mdl.get('id',''),'owned_by':mdl.get('owned_by','')})
+                        return self.send_json(200, {'ok':True,'provider':m['name'],'providerId':m['id'],'models':result})
+                    except urllib.error.HTTPError as e:
+                        return self.send_json(502, {'ok':False,'error':f'API 请求失败 (HTTP {e.code})','detail':e.read().decode(errors='replace')[:500]})
+                    except urllib.error.URLError as e:
+                        return self.send_json(502, {'ok':False,'error':'无法连接 API，请检查网络或配置代理','detail':str(e.reason)})
+                    except json.JSONDecodeError:
+                        return self.send_json(502, {'ok':False,'error':'API 返回非 JSON 数据，请检查 Base URL 是否正确'})
+                    except Exception as e:
+                        return self.send_json(502, {'ok':False,'error':f'拉取模型列表失败: {str(e)}'})
+            if self.path=='/api/admin/batch-import-models':
+                if not require_admin(self): return
+                d=read_json(self); pid=d.get('providerId'); models_data=d.get('models', [])
+                if not pid: return self.send_json(400, {'error':'providerId 必填'})
+                if not models_data: return self.send_json(400, {'error':'请选择要导入的模型'})
+                t=now(); imported=[]
+                with db() as con:
+                    for mdl in models_data:
+                        mid = (mdl.get('modelId') or '').strip()
+                        if not mid: continue
+                        dn = (mdl.get('displayName') or mid).strip()
+                        try:
+                            cur=con.execute('insert into models(provider_id,model_id,display_name,purpose,temperature,max_tokens,is_default,enabled,created_at,updated_at) values(?,?,?,?,?,?,?,?,?,?)',(pid,mid,dn,'learning_plan',0.3,4096,0,1,t,t))
+                            imported.append({'id':cur.lastrowid,'modelId':mid,'displayName':dn})
+                        except sqlite3.IntegrityError:
+                            pass
+                    con.commit()
+                return self.send_json(200, {'ok':True,'imported':imported,'count':len(imported)})
             if self.path=='/api/v1/analyze-learning-link':
                 if not require_internal(self): return
                 start=time.time(); data=read_json(self); model=None
                 try:
                     if not re.match(r'^https?://',data.get('url','')): raise RuntimeError('请输入 http/https 学习链接')
                     with db() as con: model=select_model(con)
-                    ctx=collect_context(data['url']); plan=call_model(model,ctx,data)
-                    with db() as con: con.execute('insert into call_logs(client_name,template,provider_name,model_id,success,latency_ms,error_message,created_at) values(?,?,?,?,?,?,?,?)',(data.get('clientName','learning-tracker'),data.get('template','learning_plan'),model['provider_name'],model['model_id'],1,int((time.time()-start)*1000),'',now())); con.commit()
+                    proxy = model.get('proxy') or os.getenv('HTTP_PROXY', '') or os.getenv('HTTPS_PROXY', '')
+                    ctx=collect_context(data['url'], proxy=proxy); plan=call_model(model,ctx,data, proxy=proxy)
+                    with db() as con: con.execute('insert into call_logs(client_name,template,provider_name,model_id,success,latency_ms,error_message,error_detail,created_at) values(?,?,?,?,?,?,?,?,?)',(data.get('clientName','learning-tracker'),data.get('template','learning_plan'),model['provider_name'],model['model_id'],1,int((time.time()-start)*1000),'','',now())); con.commit()
                     return self.send_json(200, {'ok':True,'plan':plan,'provider':model['provider_name'],'model':model['model_id'],'fetched':{'kind':ctx.get('kind'),'title':ctx.get('title'),'headings':ctx.get('headings',[])[:10]}})
                 except Exception as e:
-                    with db() as con: con.execute('insert into call_logs(client_name,template,provider_name,model_id,success,latency_ms,error_message,created_at) values(?,?,?,?,?,?,?,?)',(data.get('clientName','learning-tracker'),data.get('template','learning_plan'),model['provider_name'] if model else '',model['model_id'] if model else '',0,int((time.time()-start)*1000),str(e),now())); con.commit()
+                    detail = f'{type(e).__name__}: {str(e)}'
+                    with db() as con: con.execute('insert into call_logs(client_name,template,provider_name,model_id,success,latency_ms,error_message,error_detail,created_at) values(?,?,?,?,?,?,?,?,?)',(data.get('clientName','learning-tracker'),data.get('template','learning_plan'),model['provider_name'] if model else '',model['model_id'] if model else '',0,int((time.time()-start)*1000),str(e),detail[:2000],now())); con.commit()
                     return self.send_json(500, {'ok':False,'error':str(e)})
             return self.send_json(404, {'error':'not_found'})
         except urllib.error.HTTPError as e: return self.send_json(502, {'ok':False,'error':f'upstream HTTP {e.code}: {e.read().decode(errors="replace")[:500]}'})
+        except Exception as e: return self.send_json(500, {'ok':False,'error':str(e)})
+    def do_PUT(self):
+        try:
+            if not require_admin(self): return
+            d=read_json(self); t=now()
+            m1=re.match(r'/api/admin/providers/(\d+)$',self.path)
+            if m1:
+                pid=int(m1.group(1))
+                name=(d.get('name') or '').strip()
+                base_url=(d.get('baseUrl') or '').strip().rstrip('/')
+                proxy=(d.get('proxy') or '').strip()
+                enabled=1 if d.get('enabled',True) else 0
+                with db() as con:
+                    row=con.execute('select * from providers where id=?',(pid,)).fetchone()
+                    if not row: return self.send_json(404, {'error':'Provider 未找到'})
+                    api_key_encrypted = row['api_key_encrypted']
+                    if d.get('apiKey'):
+                        api_key_encrypted = encrypt_secret(d['apiKey'].strip())
+                    con.execute('update providers set name=?,base_url=?,api_key_encrypted=?,proxy=?,enabled=?,updated_at=? where id=?',(name or row['name'],base_url or row['base_url'],api_key_encrypted,proxy,enabled,t,pid))
+                    con.commit()
+                    return self.send_json(200, {'ok':True,'id':pid,'name':name or row['name'],'baseUrl':base_url or row['base_url'],'apiKeyMasked':'********','proxy':proxy,'enabled':bool(enabled),'updatedAt':t})
+            m2=re.match(r'/api/admin/models/(\d+)$',self.path)
+            if m2:
+                mid=int(m2.group(1))
+                with db() as con:
+                    row=con.execute('select * from models where id=?',(mid,)).fetchone()
+                    if not row: return self.send_json(404, {'error':'Model 未找到'})
+                    model_id=(d.get('modelId') or row['model_id']).strip()
+                    display_name=(d.get('displayName') or row['display_name']).strip()
+                    purpose=d.get('purpose') or row['purpose']
+                    temperature=float(d.get('temperature', row['temperature']))
+                    max_tokens=int(d.get('maxTokens', row['max_tokens']))
+                    is_default=1 if d.get('isDefault', row['is_default']) else 0
+                    enabled=1 if d.get('enabled', row['enabled']) else 0
+                    if d.get('isDefault'): con.execute('update models set is_default=0')
+                    con.execute('update models set model_id=?,display_name=?,purpose=?,temperature=?,max_tokens=?,is_default=?,enabled=?,updated_at=? where id=?',(model_id,display_name,purpose,temperature,max_tokens,is_default,enabled,t,mid))
+                    con.commit()
+                    return self.send_json(200, {'ok':True,'id':mid})
+            return self.send_json(404, {'error':'not_found'})
         except Exception as e: return self.send_json(500, {'ok':False,'error':str(e)})
     def do_DELETE(self):
         if not require_admin(self): return

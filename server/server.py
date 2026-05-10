@@ -199,7 +199,7 @@ def call_ai_hub(url: str, goal: str, level: str, hours_per_week: int) -> dict | 
         headers={"Content-Type": "application/json", "Authorization": f"Bearer {hub_token}"},
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=90) as resp:
+    with urllib.request.urlopen(req, timeout=120) as resp:
         payload = json.loads(resp.read().decode("utf-8"))
     plan = payload.get("plan")
     if isinstance(plan, dict):

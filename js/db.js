@@ -158,6 +158,72 @@ export class LearningDB {
 
   async deletePlan(id) { this.db.run('DELETE FROM plans WHERE id=?', [id]); await this.persist(); }
 
+  async duplicatePlan(planId) {
+    const plan = this.getPlan(planId);
+    if (!plan) return null;
+    const milestones = this.getMilestones(planId);
+    const tasks = this.getTasks(planId);
+    const newId = uid('plan');
+    const created = now();
+    this.db.run('BEGIN');
+    try {
+      this.db.run(`INSERT INTO plans VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [newId, plan.title + ' (副本)', plan.source_url, plan.description, plan.category, plan.difficulty, 'not_started', 0, plan.estimated_hours || 0, created, created, null]);
+      for (const m of milestones) {
+        const mid = uid('milestone');
+        this.db.run(`INSERT INTO milestones VALUES (?, ?, ?, ?, ?)`, [mid, newId, m.title, m.description || '', m.order_index]);
+        const mTasks = tasks.filter(t => t.milestone_id === m.id);
+        for (const t of mTasks) {
+          const tid = uid('task');
+          this.db.run(`INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [tid, newId, mid, t.title, t.description || '', 'todo', 0, t.estimated_minutes || 0, 0, t.priority || 'medium', t.order_index, created, created, null]);
+        }
+      }
+      this.db.run('COMMIT');
+      await this.persist();
+      return newId;
+    } catch (e) { this.db.run('ROLLBACK'); throw e; }
+  }
+
+  async updatePlan(id, patch) {
+    const plan = this.getPlan(id);
+    if (!plan) return;
+    const next = { ...plan, ...patch, updated_at: now() };
+    this.db.run(`UPDATE plans SET title=?, description=?, category=?, difficulty=?, source_url=?, estimated_hours=?, updated_at=? WHERE id=?`, [next.title, next.description, next.category, next.difficulty, next.source_url, next.estimated_hours, next.updated_at, id]);
+    await this.persist();
+  }
+
+  async createMilestone(planId, title, description = '', orderIndex = null) {
+    const id = uid('milestone');
+    const created = now();
+    const milestones = this.getMilestones(planId);
+    const idx = orderIndex || (milestones.length > 0 ? Math.max(...milestones.map(m => m.order_index)) + 1 : 1);
+    this.db.run(`INSERT INTO milestones VALUES (?, ?, ?, ?, ?)`, [id, planId, title, description, idx]);
+    await this.persist();
+    return id;
+  }
+
+  async updateMilestone(id, patch) {
+    const sets = Object.entries(patch).map(([k, v]) => `${k}=?`).join(',');
+    const vals = Object.values(patch);
+    this.db.run(`UPDATE milestones SET ${sets} WHERE id=?`, [...vals, id]);
+    await this.persist();
+  }
+
+  async deleteMilestone(id) {
+    this.db.run('DELETE FROM tasks WHERE milestone_id=?', [id]);
+    this.db.run('DELETE FROM milestones WHERE id=?', [id]);
+    await this.persist();
+  }
+
+  async addTaskToMilestone(planId, milestoneId, title, description = '', estimatedMinutes = 60, priority = 'medium') {
+    const id = uid('task');
+    const created = now();
+    const tasks = this.rows('SELECT order_index FROM tasks WHERE milestone_id=? ORDER BY order_index DESC LIMIT 1', [milestoneId]);
+    const orderIndex = tasks.length > 0 ? tasks[0].order_index + 1 : 1;
+    this.db.run(`INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [id, planId, milestoneId, title, description, 'todo', 0, estimatedMinutes, 0, priority, orderIndex, created, created, null]);
+    await this.persist();
+    return id;
+  }
+
   async recalculatePlan(planId) {
     const tasks = this.getTasks(planId);
     const progress = tasks.length ? Math.round(tasks.reduce((s, t) => s + Number(t.progress || 0), 0) / tasks.length) : 0;

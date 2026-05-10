@@ -19,7 +19,7 @@
         <button type="submit">登录</button>
         <small id="login-error" class="error"></small>
       </form>
-      <div class="hint">演示账号：admin / admin</div>
+      <div class="hint">演示账号：admin / admin123</div>
     </div>
   </section>
 
@@ -73,6 +73,35 @@
         <button type="button" class="ghost" id="cancel-plan">取消</button>
         <button type="button" class="ghost" id="ai-analyze-plan">AI 深度分析</button>
         <button type="submit" class="primary" id="quick-generate-plan">快速生成并保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="edit-plan-dialog" class="modal">
+    <form id="edit-plan-form" method="dialog">
+      <h3>编辑计划</h3>
+      <input type="hidden" id="edit-plan-id" />
+      <label>计划标题<input id="edit-plan-title" required /></label>
+      <label>描述<input id="edit-plan-desc" /></label>
+      <div class="grid-2">
+        <label>分类<input id="edit-plan-category" /></label>
+        <label>预计小时<input id="edit-plan-hours" type="number" min="0" step="1" /></label>
+      </div>
+      <label>链接<input id="edit-plan-url" /></label>
+      <div class="modal-actions">
+        <button type="button" class="ghost" id="cancel-edit-plan">取消</button>
+        <button type="submit" class="primary">保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="confirm-dialog" class="modal">
+    <form method="dialog">
+      <h3>确认操作</h3>
+      <p id="confirm-msg"></p>
+      <div class="modal-actions">
+        <button type="button" class="ghost" id="confirm-cancel">取消</button>
+        <button type="button" class="danger primary" id="confirm-action">确认</button>
       </div>
     </form>
   </dialog>
