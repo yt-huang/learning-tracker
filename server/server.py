@@ -255,15 +255,29 @@ def fetch_github_readme(url: str) -> dict | None:
         data, _ = fetch_url(f"https://api.github.com/repos/{owner}/{repo}/readme")
         payload = json.loads(data)
         readme = base64.b64decode(payload.get("content", "")).decode("utf-8", errors="replace") if payload.get("content") else ""
-        meta, _ = fetch_url(f"https://api.github.com/repos/{owner}/{repo}")
-        meta = json.loads(meta)
-        return {"kind": "github", "title": f"{owner}/{repo}", "description": meta.get("description", ""), "content": readme, "topics": meta.get("topics", []), "language": meta.get("language", ""), "stars": meta.get("stargazers_count", 0)}
-    except Exception:
         try:
-            readme, _ = fetch_url(f"https://raw.githubusercontent.com/{owner}/{repo}/main/README.md")
-            return {"kind": "github", "title": f"{owner}/{repo}", "description": "", "content": readme, "topics": [], "language": "", "stars": 0}
+            meta, _ = fetch_url(f"https://api.github.com/repos/{owner}/{repo}")
+            meta = json.loads(meta)
+            return {"kind": "github", "title": f"{owner}/{repo}", "description": meta.get("description", ""), "content": readme, "topics": meta.get("topics", []), "language": meta.get("language", ""), "stars": meta.get("stargazers_count", 0)}
         except Exception:
-            return None
+            return {"kind": "github", "title": f"{owner}/{repo}", "description": "", "content": readme, "topics": [], "language": "", "stars": 0}
+    except Exception:
+        # Try raw.githubusercontent.com as fallback (no API key needed)
+        for branch in ("main", "master", "trunk"):
+            try:
+                readme, _ = fetch_url(f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/README.md")
+                return {"kind": "github", "title": f"{owner}/{repo}", "description": "", "content": readme, "topics": [], "language": "", "stars": 0}
+            except Exception:
+                continue
+        # Last resort — try other common filenames
+        for name in ("readme.md", "Readme.md", "README.markdown", "README.rst", "index.md"):
+            for branch in ("main", "master"):
+                try:
+                    readme, _ = fetch_url(f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{name}")
+                    return {"kind": "github", "title": f"{owner}/{repo}", "description": "", "content": readme, "topics": [], "language": "", "stars": 0}
+                except Exception:
+                    continue
+        return None
 
 
 def html_to_text(markup: str) -> tuple[str, list[str], str]:
@@ -315,21 +329,77 @@ def collect_link_context(url: str) -> dict:
 def fallback_plan(ctx: dict, goal: str = "", level: str = "进阶", hours_per_week: int = 5) -> dict:
     headings = [h for h in ctx.get("headings", []) if 3 <= len(h) <= 80]
     title = ctx.get("title") or "AI 生成学习计划"
-    phase_titles = headings[:5] if len(headings) >= 4 else ["内容概览与学习目标", "核心概念精读", "实践复现与案例分析", "总结输出与迁移应用"]
-    total_hours = max(8, min(40, len(phase_titles) * max(2, int(hours_per_week or 5))))
-    per_phase = max(90, round(total_hours * 60 / len(phase_titles)))
+    desc = ctx.get("description", "") or goal or f"基于 {title} 的学习计划"
+    content = ctx.get("content", "")
+    topics = ctx.get("topics", [])
+    language = ctx.get("language", "")
+    stars = ctx.get("stars", 0)
+
+    # Determine phases from headings or use smart defaults
+    if len(headings) >= 4:
+        phase_titles = headings[:6]
+    else:
+        phase_titles = ["内容概览与学习目标", "核心概念精读", "实践复现与案例分析", "总结输出与迁移应用"]
+        if ctx.get("kind") == "github":
+            phase_titles = ["项目背景与结构理解", "环境搭建与快速上手", "核心功能精读与实验", "代码/配置深度分析", "最佳实践与总结输出"]
+            if stars > 1000:
+                phase_titles.append("社区生态与进阶方向")
+
+    # Analyze content for better task descriptions
+    has_code = bool(re.search(r"```|def |function |class |import |const |let |var ", content))
+    has_commands = bool(re.search(r"(?:^|\n)\s*[\$#>]\s", content))
+    has_steps = bool(re.search(r"(?:步骤|step|第[一二三四五六七八九十]|首先|然后|最后)", content))
+
+    total_hours = max(6, min(40, len(phase_titles) * max(2, int(hours_per_week or 5))))
+    per_phase = max(60, round(total_hours * 60 / len(phase_titles)))
+
     milestones = []
     for i, phase in enumerate(phase_titles, 1):
+        tasks = [
+            {
+                "title": f"阅读与梳理：{phase}",
+                "description": f"仔细阅读 {title} 中与「{phase}」相关的内容，提取关键概念、术语和流程图。",
+                "estimatedMinutes": round(per_phase * 0.3),
+                "acceptance": "完成不少于5个关键点的结构化笔记",
+            },
+            {
+                "title": f"实践验证：{phase}",
+                "description": f"根据资料内容完成{'代码示例/命令' if has_code or has_commands else '操作演练/案例分析'}，验证理解。",
+                "estimatedMinutes": round(per_phase * 0.4),
+                "acceptance": "有可运行的结果或可复述的实践过程",
+            },
+            {
+                "title": f"复盘输出：{phase}",
+                "description": f"总结本阶段学习收获、遇到的问题和下一步计划。{'记录关键代码片段和运行结果。' if has_code else ''}",
+                "estimatedMinutes": round(per_phase * 0.3),
+                "acceptance": "写出阶段总结并更新学习日志",
+            },
+        ]
         milestones.append({
-            "title": f"阶段{i}：{phase}", "description": f"围绕 {title} 的「{phase}」建立阶段性理解和可验证产出。",
-            "goal": f"掌握 {phase}，并形成可复用笔记/实践记录。",
-            "tasks": [
-                {"title": f"阅读并梳理：{phase}", "description": "提取关键概念、术语、依赖关系和疑问点。", "estimatedMinutes": round(per_phase * 0.35), "acceptance": "完成结构化笔记，列出不少于 5 个关键点。"},
-                {"title": f"实践验证：{phase}", "description": "根据资料内容完成示例、命令、代码或操作演练。", "estimatedMinutes": round(per_phase * 0.45), "acceptance": "有可截图、可运行或可复述的实践结果。"},
-                {"title": f"复盘输出：{phase}", "description": "总结本阶段收获、阻塞和下一步计划。", "estimatedMinutes": round(per_phase * 0.2), "acceptance": "写出阶段总结，并更新学习日志。"},
-            ],
+            "title": f"阶段{i}：{phase}",
+            "description": f"围绕 {title} 的「{phase}」建立理解并产出可验证结果。{'包含 ' + language + ' 代码实践' if language and has_code else ''}",
+            "goal": f"掌握 {phase} 相关知识，完成笔记和实践记录。",
+            "tasks": tasks,
         })
-    return {"title": title, "sourceUrl": ctx.get("url", ""), "description": goal or ctx.get("description", "") or f"基于链接内容自动生成的 {title} 学习计划。", "category": "GitHub 项目" if ctx.get("kind") == "github" else "在线资料", "difficulty": level or "进阶", "estimatedHours": total_hours, "milestones": milestones, "aiUsed": False, "analysisSummary": "已使用链接标题/目录结构生成启发式学习计划。"}
+
+    category = "在线资料"
+    if ctx.get("kind") == "github":
+        category = f"GitHub · {language}" if language else "GitHub 项目"
+    if topics:
+        category += f" ({', '.join(topics[:3])})"
+
+    return {
+        "title": title,
+        "sourceUrl": ctx.get("url", ""),
+        "description": desc,
+        "category": category,
+        "difficulty": level or "进阶",
+        "estimatedHours": total_hours,
+        "milestones": milestones,
+        "aiUsed": False,
+        "aiStrategy": "fallback",
+        "analysisSummary": f"已基于链接内容（{len(headings)} 个章节）生成启发式学习计划。{'配置 AI API Key 可获得更精准的计划。' if not os.getenv('OPENAI_API_KEY') and not os.getenv('DEEPSEEK_API_KEY') and not os.getenv('AI_API_KEY') else ''}",
+    }
 
 
 def extract_json(text: str) -> dict:
@@ -364,21 +434,87 @@ def call_ai(ctx: dict, goal: str, level: str, hours_per_week: int) -> dict | Non
     api_key = os.getenv("OPENAI_API_KEY") or os.getenv("DEEPSEEK_API_KEY") or os.getenv("AI_API_KEY")
     if not api_key:
         return None
-    base_url = os.getenv("OPENAI_BASE_URL") or ("https://api.deepseek.com/v1" if os.getenv("DEEPSEEK_API_KEY") else "https://api.openai.com/v1")
-    model = os.getenv("OPENAI_MODEL") or os.getenv("AI_MODEL") or ("deepseek-chat" if os.getenv("DEEPSEEK_API_KEY") else "gpt-4o-mini")
-    prompt = f"""你是学习规划专家。根据链接内容生成适合 Learning Tracker 的学习计划，只输出 JSON。
-JSON: title, sourceUrl, description, category, difficulty, estimatedHours, analysisSummary, milestones (title, description, goal, tasks).
-tasks: title, description, estimatedMinutes, acceptance.
-4-6 阶段，每阶段 3-5 任务。
-用户目标：{goal or '未填写'}  用户水平：{level or '进阶'}  每周可投入：{hours_per_week or 5}
-链接上下文：{json.dumps(ctx, ensure_ascii=False)[:MAX_CONTENT_CHARS]}"""
-    body = {"model": model, "messages": [{"role": "system", "content": "JSON only."}, {"role": "user", "content": prompt}], "temperature": 0.3, "response_format": {"type": "json_object"}}
-    req = urllib.request.Request(base_url.rstrip("/") + "/chat/completions", data=json.dumps(body).encode("utf-8"), headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"}, method="POST")
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        payload = json.loads(resp.read().decode("utf-8"))
-    plan = extract_json(payload["choices"][0]["message"]["content"])
-    plan["aiUsed"] = True
-    return plan
+    # Detect provider
+    use_deepseek = bool(os.getenv("DEEPSEEK_API_KEY"))
+    use_openai = bool(os.getenv("OPENAI_API_KEY")) and not use_deepseek
+    base_url = os.getenv("OPENAI_BASE_URL") or ("https://api.deepseek.com/v1" if use_deepseek else "https://api.openai.com/v1")
+    model = os.getenv("OPENAI_MODEL") or os.getenv("AI_MODEL") or ("deepseek-chat" if use_deepseek else "gpt-4o-mini")
+
+    # Truncate context to avoid token overflow (rough: 1 token ≈ 2 chars for CJK)
+    ctx_json = json.dumps(ctx, ensure_ascii=False)
+    max_ctx = 6000 if use_deepseek else MAX_CONTENT_CHARS
+    if len(ctx_json) > max_ctx:
+        ctx_trimmed = dict(ctx)
+        content = ctx_trimmed.get("content", "")
+        if content and len(content) > max_ctx * 2:
+            ctx_trimmed["content"] = content[:max_ctx * 2] + f"\n... [截断至 {max_ctx * 2} 字符]"
+        ctx_json = json.dumps(ctx_trimmed, ensure_ascii=False)[:max_ctx + 200]
+
+    prompt = f"""你是一个专业的学习规划师。根据用户提供的学习链接内容，生成结构化的学习计划。
+
+## 输出要求
+- 只输出 JSON，不要任何解释或 Markdown 代码块包裹
+- JSON 必须包含以下字段：
+  - title: 计划标题
+  - description: 一句话描述
+  - category: 分类（从内容推断）
+  - difficulty: "{level}"
+  - estimatedHours: 预计总学习小时数（整数）
+  - analysisSummary: 一段总结说明
+  - milestones: 阶段数组，每个阶段包含：
+    - title: 阶段标题（中文，带编号如"阶段一：XXX"）
+    - description: 本阶段目标
+    - goal: 可验证的产出标准
+    - tasks: 任务数组，每个任务包含：
+      - title: 任务名称（中文，具体可执行）
+      - description: 任务描述
+      - estimatedMinutes: 预计耗时（分钟）
+      - acceptance: 完成标准
+
+## 计划设计要求
+- 拆成 4-6 个阶段，由浅入深
+- 每阶段 3-5 个具体任务
+- 如果是 GitHub 项目，至少包含：环境准备 → 核心理解 → 实践验证 → 总结输出
+- 如果是教程/文章，按：概念理解 → 精读重点 → 实践巩固 → 复盘输出
+- 任务要具体到"阅读第X章"、"完成示例X"、"写一段总结"这种程度
+- estimatedMinutes 要合理分配，总和不等于 estimatedHours × 60 也没关系，宁缺毋滥
+
+## 用户信息
+- 学习目标：{goal or '未填写'}
+- 当前水平：{level or '进阶'}
+- 每周可投入：{hours_per_week or 5} 小时
+
+## 链接内容
+{ctx_json}"""
+
+    messages = [
+        {"role": "system", "content": "你是一个严格输出 JSON 的学习规划助手。只输出 JSON 对象，不含任何其他文字。"},
+        {"role": "user", "content": prompt},
+    ]
+    body = {"model": model, "messages": messages, "temperature": 0.3}
+
+    # DeepSeek doesn't support response_format
+    if not use_deepseek:
+        body["response_format"] = {"type": "json_object"}
+
+    print(f"[AI] Calling {model} via {base_url}... (ctx={len(ctx_json)} chars, goal={goal})", file=sys.stderr, flush=True)
+    req = urllib.request.Request(
+        base_url.rstrip("/") + "/chat/completions",
+        data=json.dumps(body).encode("utf-8"),
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=90) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+        content = payload["choices"][0]["message"]["content"]
+        plan = extract_json(content)
+        plan["aiUsed"] = True
+        print(f"[AI] Success: {plan.get('title', '?')} ({len(plan.get('milestones',[]))} phases)", file=sys.stderr, flush=True)
+        return plan
+    except Exception as e:
+        print(f"[AI] Error: {e}", file=sys.stderr, flush=True)
+        return None
 
 
 def normalize_plan(plan: dict, source_url: str) -> dict:
@@ -388,10 +524,23 @@ def normalize_plan(plan: dict, source_url: str) -> dict:
     plan.setdefault("category", "AI 分析")
     plan.setdefault("difficulty", "进阶")
     plan.setdefault("estimatedHours", 12)
+    plan.setdefault("analysisSummary", "由 AI 生成的学习计划")
     clean_milestones = []
     for idx, m in enumerate(plan.get("milestones") or [], 1):
-        tasks = [{"title": str(t.get("title", "学习任务")), "description": str(t.get("description", t.get("acceptance", "完成该任务并记录学习日志。"))), "estimatedMinutes": int(t.get("estimatedMinutes", 60)), "priority": t.get("priority", "medium")} for t in m.get("tasks", [])[:5]]
-        clean_milestones.append({"title": str(m.get("title", f"阶段{idx}")), "description": str(m.get("description", m.get("goal", "阶段学习目标"))), "orderIndex": idx, "tasks": tasks})
+        tasks = []
+        for t in m.get("tasks", [])[:5]:
+            tasks.append({
+                "title": str(t.get("title", "学习任务")),
+                "description": str(t.get("description", t.get("acceptance", "完成该任务并记录学习日志。"))),
+                "estimatedMinutes": int(t.get("estimatedMinutes", 60)),
+                "priority": t.get("priority", "medium"),
+            })
+        clean_milestones.append({
+            "title": str(m.get("title", f"阶段{idx}")),
+            "description": str(m.get("description", m.get("goal", "阶段学习目标"))),
+            "orderIndex": idx,
+            "tasks": tasks,
+        })
     plan["milestones"] = clean_milestones[:6]
     return plan
 
@@ -920,18 +1069,48 @@ class Handler(SimpleHTTPRequestHandler):
             goal = str(body.get("goal", "")).strip()
             level = str(body.get("level", "进阶")).strip()
             hours = int(body.get("hoursPerWeek", 5))
+
+            # Strategy 1: Try AI Hub (internal LLM service)
             try:
                 hub_plan = call_ai_hub(url, goal, level, hours)
-            except Exception:
-                hub_plan = None
-            if hub_plan:
-                return self.send_json(200, {"ok": True, "plan": normalize_plan(hub_plan, url), "fetched": {"kind": "ai-hub", "title": hub_plan.get("title", "")}})
-            ctx = collect_link_context(url)
-            plan = call_ai(ctx, goal, level, hours) or fallback_plan(ctx, goal, level, hours)
-            return self.send_json(200, {"ok": True, "plan": normalize_plan(plan, url), "fetched": {"kind": ctx.get("kind"), "title": ctx.get("title"), "headings": ctx.get("headings", [])[:10]}})
-        except urllib.error.HTTPError as e:
-            return self.send_json(502, {"ok": False, "error": f"链接读取失败：HTTP {e.code}"})
+                if hub_plan:
+                    plan = normalize_plan(hub_plan, url)
+                    plan["aiStrategy"] = "ai-hub"
+                    return self.send_json(200, {"ok": True, "plan": plan, "fetched": {"kind": "ai-hub", "title": plan.get("title", "")}})
+            except Exception as e:
+                print(f"[AI-Hub] Error: {e}", file=sys.stderr, flush=True)
+
+            # Strategy 2: Collect link context and try direct AI call
+            try:
+                ctx = collect_link_context(url)
+                fetched_info = {"kind": ctx.get("kind"), "title": ctx.get("title"), "headings": ctx.get("headings", [])[:10]}
+            except Exception as e:
+                print(f"[Fetch] Error reading link: {e}", file=sys.stderr, flush=True)
+                return self.send_json(502, {"ok": False, "error": f"无法读取链接内容：{e}"})
+
+            # Strategy 3: Direct AI (OpenAI/DeepSeek)
+            try:
+                ai_plan = call_ai(ctx, goal, level, hours)
+                if ai_plan:
+                    plan = normalize_plan(ai_plan, url)
+                    plan["aiStrategy"] = "direct-ai"
+                    return self.send_json(200, {"ok": True, "plan": plan, "fetched": fetched_info})
+            except Exception as e:
+                print(f"[AI-Direct] Error: {e}", file=sys.stderr, flush=True)
+
+            # Strategy 4: Local fallback (heading-based heuristic)
+            print(f"[AI] Fallback to heuristic for {url}", file=sys.stderr, flush=True)
+            try:
+                plan = fallback_plan(ctx, goal, level, hours)
+                plan = normalize_plan(plan, url)
+                plan["aiStrategy"] = "fallback"
+                return self.send_json(200, {"ok": True, "plan": plan, "fetched": fetched_info})
+            except Exception as e:
+                print(f"[Fallback] Error: {e}", file=sys.stderr, flush=True)
+                return self.send_json(500, {"ok": False, "error": f"生成计划失败：{e}"})
+
         except Exception as e:
+            print(f"[Analyze] Unhandled error: {e}", file=sys.stderr, flush=True)
             return self.send_json(500, {"ok": False, "error": str(e)})
 
     # ---- Router ----

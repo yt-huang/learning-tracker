@@ -173,7 +173,8 @@ async function analyzeLinkWithAI() {
     const data = await res.json();
     if (!res.ok || !data.ok) throw new Error(data.error || 'AI 分析失败');
     const plan = data.plan;
-    preview.innerHTML = `<b>${plan.aiUsed ? 'AI 已生成计划' : '已生成增强计划'}</b><p>${plan.analysisSummary || plan.description || ''}</p><ul><li>标题：${plan.title}</li><li>阶段：${plan.milestones?.length || 0} 个</li><li>预计：${plan.estimatedHours || 0} 小时</li></ul><button type="button" class="primary" id="save-ai-plan">保存到 MySQL</button>`;
+    const strategyLabel = {'ai-hub':'🤖 AI Hub', 'direct-ai':'🧠 AI 深度分析', 'fallback':'📋 增强启发式'}[plan.aiStrategy] || (plan.aiUsed ? 'AI' : '增强');
+    preview.innerHTML = `<b>${strategyLabel} — 计划已生成</b><p>${plan.analysisSummary || plan.description || ''}</p><ul><li>标题：${plan.title}</li><li>阶段：${plan.milestones?.length || 0} 个</li><li>预计：${plan.estimatedHours || 0} 小时</li></ul><button type="button" class="primary" id="save-ai-plan">保存到 MySQL</button>`;
     $('#save-ai-plan').onclick = async () => {
       const id = await db.createPlan(plan);
       resetPlanDialog($('#plan-form'));
