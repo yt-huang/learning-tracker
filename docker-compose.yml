@@ -1,0 +1,7 @@
+services:
+  learning-tracker:
+    image: ghcr.io/yt-huang/learning-tracker:latest
+    container_name: learning-tracker
+    restart: unless-stopped
+    ports:
+      - "8010:80"

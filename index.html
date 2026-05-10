@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Learning Tracker · SQLite 学习计划跟踪系统</title>
+  <link rel="stylesheet" href="css/style.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/sql-wasm.js"></script>
+</head>
+<body>
+  <section id="login-screen" class="login-screen">
+    <div class="login-card">
+      <div class="brand-badge">LT</div>
+      <h1>Learning Tracker</h1>
+      <p>基于 SQLite 的学习计划生成与跟踪系统</p>
+      <form id="login-form">
+        <label>用户名<input id="username" autocomplete="username" value="admin" /></label>
+        <label>密码<input id="password" type="password" autocomplete="current-password" value="admin" /></label>
+        <button type="submit">登录</button>
+        <small id="login-error" class="error"></small>
+      </form>
+      <div class="hint">演示账号：admin / admin</div>
+    </div>
+  </section>
+
+  <main id="app" class="app hidden">
+    <aside class="sidebar">
+      <div class="logo"><span>LT</span><strong>Learning Tracker</strong></div>
+      <nav>
+        <button data-view="dashboard" class="nav-btn active">仪表盘</button>
+        <button data-view="plans" class="nav-btn">学习计划</button>
+        <button data-view="logs" class="nav-btn">学习日志</button>
+        <button data-view="data" class="nav-btn">数据管理</button>
+      </nav>
+      <button id="logout-btn" class="ghost danger">退出登录</button>
+    </aside>
+
+    <section class="workspace">
+      <header class="topbar">
+        <div>
+          <h2 id="view-title">仪表盘</h2>
+          <p id="view-subtitle">SQLite + IndexedDB 实时持久化</p>
+        </div>
+        <button id="new-plan-btn" class="primary">+ 从链接生成计划</button>
+      </header>
+
+      <section id="dashboard-view" class="view"></section>
+      <section id="plans-view" class="view hidden"></section>
+      <section id="plan-detail-view" class="view hidden"></section>
+      <section id="logs-view" class="view hidden"></section>
+      <section id="data-view" class="view hidden"></section>
+    </section>
+  </main>
+
+  <dialog id="plan-dialog" class="modal">
+    <form id="plan-form" method="dialog">
+      <h3>从学习链接生成计划</h3>
+      <label>学习链接<input id="source-url" placeholder="https://github.com/luongnv89/claude-howto" required /></label>
+      <div class="grid-2">
+        <label>计划标题<input id="plan-title" placeholder="留空则自动推断" /></label>
+        <label>分类<input id="plan-category" placeholder="AI / DevOps / 编程" /></label>
+      </div>
+      <label>学习目标<textarea id="plan-goal" rows="3" placeholder="你希望通过这个链接掌握什么？"></textarea></label>
+      <div class="grid-2">
+        <label>难度
+          <select id="plan-difficulty"><option>入门</option><option selected>进阶</option><option>高级</option></select>
+        </label>
+        <label>预计总小时<input id="plan-hours" type="number" min="1" value="12" /></label>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="ghost" id="cancel-plan">取消</button>
+        <button type="submit" class="primary">生成并保存到 SQLite</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="log-dialog" class="modal">
+    <form id="log-form" method="dialog">
+      <h3>添加学习日志</h3>
+      <input type="hidden" id="log-plan-id" />
+      <input type="hidden" id="log-task-id" />
+      <label>学习摘要<input id="log-summary" required placeholder="今天完成了什么？" /></label>
+      <label>学习时长（分钟）<input id="log-duration" type="number" min="1" value="30" /></label>
+      <label>笔记<textarea id="log-notes" rows="4" placeholder="关键收获、问题、下一步"></textarea></label>
+      <div class="modal-actions">
+        <button type="button" class="ghost" id="cancel-log">取消</button>
+        <button type="submit" class="primary">写入 SQLite</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast hidden"></div>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

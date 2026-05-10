@@ -1,0 +1,6 @@
+.DS_Store
+.opencode/
+.sisyphus/
+node_modules/
+.env
+*.log
