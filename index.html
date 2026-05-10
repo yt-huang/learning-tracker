@@ -3,18 +3,16 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Learning Tracker · 学习计划跟踪系统</title>
+  <title>Learning Tracker · MySQL 学习计划跟踪系统</title>
   <link rel="stylesheet" href="css/style.css" />
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/sql-wasm.js"></script>
 </head>
 <body>
-  <!-- ==================== LOGIN / REGISTER ==================== -->
+  <!-- LOGIN -->
   <section id="login-screen" class="login-screen">
     <div class="login-card" id="login-card">
       <div class="brand-badge">LT</div>
       <h1>Learning Tracker</h1>
-      <p>多用户学习计划生成与跟踪系统</p>
-      <!-- Login form -->
+      <p>MySQL 多用户学习计划跟踪系统</p>
       <form id="login-form">
         <label>用户名<input id="username" autocomplete="username" placeholder="admin@cpaas.io" /></label>
         <label>密码<input id="password" type="password" autocomplete="current-password" placeholder="请输入密码" /></label>
@@ -26,8 +24,6 @@
       </div>
       <div id="session-warning" class="hidden" style="margin-top:10px;padding:8px;border:1px solid var(--warn);border-radius:8px;font-size:12px;color:var(--warn)"></div>
     </div>
-
-    <!-- Register card (hidden initially) -->
     <div class="login-card hidden" id="register-card">
       <div class="brand-badge">LT</div>
       <h1>注册账号</h1>
@@ -45,7 +41,7 @@
     </div>
   </section>
 
-  <!-- ==================== MAIN APP ==================== -->
+  <!-- APP -->
   <main id="app" class="app hidden">
     <aside class="sidebar">
       <div class="logo"><span>LT</span><strong>Learning Tracker</strong></div>
@@ -64,11 +60,10 @@
       <header class="topbar">
         <div>
           <h2 id="view-title">仪表盘</h2>
-          <p id="view-subtitle">学习数据来自浏览器 SQLite 数据库</p>
+          <p id="view-subtitle">MySQL 服务端存储 · 数据安全不丢失</p>
         </div>
         <button id="new-plan-btn" class="primary">+ 从链接生成计划</button>
       </header>
-
       <section id="dashboard-view" class="view"></section>
       <section id="plans-view" class="view hidden"></section>
       <section id="plan-detail-view" class="view hidden"></section>
@@ -78,28 +73,26 @@
     </section>
   </main>
 
-  <!-- ==================== DIALOGS ==================== -->
+  <!-- DIALOGS -->
   <dialog id="plan-dialog" class="modal">
     <form id="plan-form" method="dialog">
       <h3>从学习链接生成计划</h3>
-      <p class="modal-note">快速生成离线可用；AI 深度分析会读取链接内容并生成更贴合资料结构的阶段目标和任务。</p>
-      <label>学习链接<input id="source-url" placeholder="https://github.com/luongnv89/claude-howto" required /></label>
+      <p class="modal-note">AI 深度分析会读取链接内容并生成阶段目标和任务，数据写入 MySQL。</p>
+      <label>学习链接<input id="source-url" placeholder="https://github.com/..." required /></label>
       <div class="grid-2">
         <label>计划标题<input id="plan-title" placeholder="留空则自动推断" /></label>
         <label>分类<input id="plan-category" placeholder="AI / DevOps / 编程" /></label>
       </div>
       <label>学习目标<textarea id="plan-goal" rows="3" placeholder="你希望通过这个链接掌握什么？"></textarea></label>
       <div class="grid-2">
-        <label>难度
-          <select id="plan-difficulty"><option>入门</option><option selected>进阶</option><option>高级</option></select>
-        </label>
+        <label>难度<select id="plan-difficulty"><option>入门</option><option selected>进阶</option><option>高级</option></select></label>
         <label>预计总小时<input id="plan-hours" type="number" min="1" value="12" /></label>
       </div>
       <div id="ai-analysis-preview" class="ai-preview hidden"></div>
       <div class="modal-actions">
         <button type="button" class="ghost" id="cancel-plan">取消</button>
         <button type="button" class="ghost" id="ai-analyze-plan">AI 深度分析</button>
-        <button type="submit" class="primary" id="quick-generate-plan">快速生成并保存</button>
+        <button type="submit" class="primary">生成并保存</button>
       </div>
     </form>
   </dialog>
@@ -143,7 +136,25 @@
       <label>笔记<textarea id="log-notes" rows="4" placeholder="关键收获、问题、下一步"></textarea></label>
       <div class="modal-actions">
         <button type="button" class="ghost" id="cancel-log">取消</button>
-        <button type="submit" class="primary">写入 SQLite</button>
+        <button type="submit" class="primary">写入 MySQL</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="edit-task-dialog" class="modal">
+    <form id="edit-task-form" method="dialog">
+      <h3>编辑任务</h3>
+      <input type="hidden" id="edit-task-id" />
+      <input type="hidden" id="edit-task-plan-id" />
+      <label>任务标题<input id="edit-task-title" required /></label>
+      <label>描述<textarea id="edit-task-desc" rows="2"></textarea></label>
+      <div class="grid-2">
+        <label>预计时间（分）<input id="edit-task-estimated" type="number" min="1" value="60" /></label>
+        <label>优先级<select id="edit-task-priority"><option value="low">低</option><option value="medium" selected>中</option><option value="high">高</option></select></label>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="ghost" id="cancel-edit-task">取消</button>
+        <button type="submit" class="primary">保存</button>
       </div>
     </form>
   </dialog>
@@ -154,13 +165,8 @@
       <input type="hidden" id="edit-user-id" />
       <label>用户名<input id="edit-user-username" required /></label>
       <label>邮箱<input id="edit-user-email" type="email" /></label>
-      <label>角色
-        <select id="edit-user-role">
-          <option value="user">普通用户</option>
-          <option value="admin">管理员</option>
-        </select>
-      </label>
-      <label>新密码（留空不修改）<input id="edit-user-password" type="password" placeholder="留空则不修改密码" /></label>
+      <label>角色<select id="edit-user-role"><option value="user">普通用户</option><option value="admin">管理员</option></select></label>
+      <label>新密码<input id="edit-user-password" type="password" placeholder="留空不修改" /></label>
       <div class="modal-actions">
         <button type="button" class="ghost" id="cancel-edit-user">取消</button>
         <button type="submit" class="primary">保存</button>
@@ -170,33 +176,7 @@
 
   <div id="toast" class="toast hidden"></div>
   <div id="loading" class="loading hidden"><div class="spinner"></div><span id="loading-text">加载中...</span></div>
-
-  <!-- Task edit dialog -->
-  <dialog id="edit-task-dialog" class="modal">
-    <form id="edit-task-form" method="dialog">
-      <h3>编辑任务</h3>
-      <input type="hidden" id="edit-task-id" />
-      <input type="hidden" id="edit-task-plan-id" />
-      <input type="hidden" id="edit-task-milestone-id" />
-      <label>任务标题<input id="edit-task-title" required /></label>
-      <label>描述<textarea id="edit-task-desc" rows="2"></textarea></label>
-      <div class="grid-2">
-        <label>预计时间（分）<input id="edit-task-estimated" type="number" min="1" value="60" /></label>
-        <label>优先级
-          <select id="edit-task-priority">
-            <option value="low">低</option>
-            <option value="medium" selected>中</option>
-            <option value="high">高</option>
-          </select>
-        </label>
-      </div>
-      <div class="modal-actions">
-        <button type="button" class="ghost" id="cancel-edit-task">取消</button>
-        <button type="submit" class="primary">保存</button>
-      </div>
-    </form>
-  </dialog>
-  <button id="back-to-top" class="back-to-top hidden" onclick="document.getElementById('plan-detail-view')?.scrollIntoView({behavior:'smooth'})">↑</button>
+  <button id="back-to-top" class="back-to-top hidden">↑</button>
   <script type="module" src="js/app.js"></script>
 </body>
 </html>

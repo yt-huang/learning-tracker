@@ -1,270 +1,114 @@
-const IDB_NAME_PREFIX = 'learning-tracker-sqlite';
-const DB_KEY_PREFIX = 'learning-tracker';
+/* REST API client — all data stored in MySQL via server.py */
 
-function now() { return new Date().toISOString(); }
-function uid(prefix) { return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`; }
+function apiBase() {
+  return window.location.origin;
+}
+
+async function api(method, path, body = null) {
+  const headers = { 'Content-Type': 'application/json' };
+  const token = localStorage.getItem('lt_token');
+  if (token) headers['Authorization'] = 'Bearer ' + token;
+  const opts = { method, headers };
+  if (body) opts.body = JSON.stringify(body);
+  const res = await fetch(apiBase() + path, opts);
+  return res.json();
+}
 
 export class LearningDB {
-  constructor(userId = 'default') {
-    this.userId = userId;
-    this.SQL = null;
-    this.db = null;
-  }
-
-  getIdbName() { return `${IDB_NAME_PREFIX}-${this.userId}`; }
-  getDbKey() { return `${DB_KEY_PREFIX}-${this.userId}.db`; }
+  constructor() {}
 
   async init() {
-    this.SQL = await window.initSqlJs({ locateFile: f => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/${f}` });
-    const bytes = await this.loadBytes();
-    this.db = bytes ? new this.SQL.Database(bytes) : new this.SQL.Database();
-    this.createSchema();
-    if (!this.getPlans().length) await this.seed();
+    // nothing to init — no sql.js anymore
     return this;
   }
 
-  createSchema() {
-    this.db.run(`
-      PRAGMA foreign_keys = ON;
-      CREATE TABLE IF NOT EXISTS plans (
-        id TEXT PRIMARY KEY, title TEXT NOT NULL, source_url TEXT, description TEXT,
-        category TEXT, difficulty TEXT, status TEXT, progress INTEGER DEFAULT 0,
-        estimated_hours REAL DEFAULT 0, created_at TEXT, updated_at TEXT, completed_at TEXT
-      );
-      CREATE TABLE IF NOT EXISTS milestones (
-        id TEXT PRIMARY KEY, plan_id TEXT NOT NULL, title TEXT NOT NULL, description TEXT,
-        order_index INTEGER DEFAULT 0,
-        FOREIGN KEY(plan_id) REFERENCES plans(id) ON DELETE CASCADE
-      );
-      CREATE TABLE IF NOT EXISTS tasks (
-        id TEXT PRIMARY KEY, plan_id TEXT NOT NULL, milestone_id TEXT NOT NULL,
-        title TEXT NOT NULL, description TEXT, status TEXT DEFAULT 'todo', progress INTEGER DEFAULT 0,
-        estimated_minutes INTEGER DEFAULT 0, spent_minutes INTEGER DEFAULT 0, priority TEXT DEFAULT 'medium',
-        order_index INTEGER DEFAULT 0, created_at TEXT, updated_at TEXT, completed_at TEXT,
-        FOREIGN KEY(plan_id) REFERENCES plans(id) ON DELETE CASCADE,
-        FOREIGN KEY(milestone_id) REFERENCES milestones(id) ON DELETE CASCADE
-      );
-      CREATE TABLE IF NOT EXISTS logs (
-        id TEXT PRIMARY KEY, plan_id TEXT NOT NULL, task_id TEXT,
-        date TEXT NOT NULL, duration_minutes INTEGER DEFAULT 0, summary TEXT, notes TEXT, created_at TEXT,
-        FOREIGN KEY(plan_id) REFERENCES plans(id) ON DELETE CASCADE,
-        FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE SET NULL
-      );
-    `);
+  // ---- Plans ----
+  async getPlans() {
+    const res = await api('GET', '/api/plans');
+    return res.ok ? (res.plans || []) : [];
   }
 
-  rows(sql, params = []) {
-    const stmt = this.db.prepare(sql);
-    stmt.bind(params);
-    const out = [];
-    while (stmt.step()) out.push(stmt.getAsObject());
-    stmt.free();
-    return out;
-  }
-
-  async persist() {
-    const bytes = this.db.export();
-    const idbName = this.getIdbName();
-    const dbKey = this.getDbKey();
-    await new Promise((resolve, reject) => {
-      const req = indexedDB.open(idbName, 1);
-      req.onupgradeneeded = () => req.result.createObjectStore('database');
-      req.onerror = () => reject(req.error);
-      req.onsuccess = () => {
-        const db = req.result;
-        const tx = db.transaction('database', 'readwrite');
-        tx.objectStore('database').put(bytes, dbKey);
-        tx.oncomplete = () => { db.close(); resolve(); };
-        tx.onerror = () => reject(tx.error);
-      };
-    });
-  }
-
-  async loadBytes() {
-    const idbName = this.getIdbName();
-    const dbKey = this.getDbKey();
-    return new Promise((resolve) => {
-      const req = indexedDB.open(idbName, 1);
-      req.onupgradeneeded = () => req.result.createObjectStore('database');
-      req.onerror = () => resolve(null);
-      req.onsuccess = () => {
-        const db = req.result;
-        const tx = db.transaction('database', 'readonly');
-        const get = tx.objectStore('database').get(dbKey);
-        get.onsuccess = () => { resolve(get.result || null); db.close(); };
-        get.onerror = () => { resolve(null); db.close(); };
-      };
-    });
-  }
-
-  async seed() {
-    await this.createPlan({
-      title: '入门示例：新用户学习模板',
-      sourceUrl: 'https://github.com/',
-      description: '这是你的第一个学习计划，用于快速了解系统功能。可以从链接生成更多计划。',
-      category: '入门',
-      difficulty: '入门',
-      estimatedHours: 2,
-      milestones: [
-        { title: '了解系统', description: '熟悉 Learning Tracker 界面与操作', orderIndex: 1, tasks: [
-          { title: '探索仪表盘', description: '查看统计卡片和学习日志', estimatedMinutes: 15, priority: 'medium' },
-          { title: '尝试进度滑块', description: '打开一个任务，拖动进度条试试', estimatedMinutes: 10, priority: 'medium' }
-        ]},
-        { title: '创建学习计划', description: '用链接生成器创建一个正式计划', orderIndex: 2, tasks: [
-          { title: '用 AI 分析生成', description: '输入一个学习链接，点击 AI 深度分析', estimatedMinutes: 20, priority: 'high' },
-          { title: '记录学习日志', description: '在任务下方点击「记日志」写笔记', estimatedMinutes: 15, priority: 'medium' }
-        ]}
-      ]
-    });
+  async getPlan(id) {
+    const res = await api('GET', `/api/plans/${id}`);
+    return res.ok ? res.plan : null;
   }
 
   async createPlan(plan) {
-    const id = uid('plan');
-    const created = now();
-    this.db.run('BEGIN');
-    try {
-      this.db.run(`INSERT INTO plans VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [id, plan.title, plan.sourceUrl, plan.description, plan.category, plan.difficulty, 'not_started', 0, plan.estimatedHours || 0, created, created, null]);
-      for (const [mIdx, m] of (plan.milestones || []).entries()) {
-        const mid = uid('milestone');
-        this.db.run(`INSERT INTO milestones VALUES (?, ?, ?, ?, ?)`, [mid, id, m.title, m.description || '', m.orderIndex || mIdx + 1]);
-        for (const [tIdx, t] of (m.tasks || []).entries()) {
-          const tid = uid('task');
-          this.db.run(`INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [tid, id, mid, t.title, t.description || '', t.status || 'todo', t.progress || 0, t.estimatedMinutes || 0, t.spentMinutes || 0, t.priority || 'medium', t.orderIndex || tIdx + 1, created, created, null]);
-        }
-      }
-      this.db.run('COMMIT');
-      await this.persist();
-      return id;
-    } catch (e) { this.db.run('ROLLBACK'); throw e; }
-  }
-
-  getPlans() {
-    return this.rows(`SELECT p.*, COALESCE(SUM(t.spent_minutes),0) spent_minutes, COUNT(t.id) task_count,
-      SUM(CASE WHEN t.status='done' THEN 1 ELSE 0 END) done_count
-      FROM plans p LEFT JOIN tasks t ON p.id=t.plan_id GROUP BY p.id ORDER BY p.updated_at DESC`);
-  }
-  getPlan(id) { return this.rows('SELECT * FROM plans WHERE id=?', [id])[0]; }
-  getMilestones(planId) { return this.rows('SELECT * FROM milestones WHERE plan_id=? ORDER BY order_index', [planId]); }
-  getTasks(planId) { return this.rows('SELECT * FROM tasks WHERE plan_id=? ORDER BY order_index', [planId]); }
-  getLogs(planId = null) { return this.rows(`SELECT l.*, p.title plan_title, t.title task_title FROM logs l JOIN plans p ON p.id=l.plan_id LEFT JOIN tasks t ON t.id=l.task_id ${planId ? 'WHERE l.plan_id=?' : ''} ORDER BY l.created_at DESC`, planId ? [planId] : []); }
-
-  async updateTask(id, patch) {
-    const task = this.rows('SELECT * FROM tasks WHERE id=?', [id])[0];
-    if (!task) return;
-    const next = { ...task, ...patch, updated_at: now() };
-    if (next.status === 'done' && !next.completed_at) next.completed_at = now();
-    if (next.status !== 'done') next.completed_at = null;
-    this.db.run(`UPDATE tasks SET status=?, progress=?, spent_minutes=?, updated_at=?, completed_at=? WHERE id=?`, [next.status, next.progress, next.spent_minutes, next.updated_at, next.completed_at, id]);
-    await this.recalculatePlan(task.plan_id);
-    await this.persist();
-  }
-
-  async createLog({ planId, taskId, summary, durationMinutes, notes }) {
-    const id = uid('log');
-    const created = now();
-    this.db.run(`INSERT INTO logs VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, [id, planId, taskId || null, created.slice(0, 10), Number(durationMinutes || 0), summary, notes || '', created]);
-    if (taskId) {
-      const t = this.rows('SELECT spent_minutes FROM tasks WHERE id=?', [taskId])[0];
-      this.db.run('UPDATE tasks SET spent_minutes=?, updated_at=? WHERE id=?', [Number(t?.spent_minutes || 0) + Number(durationMinutes || 0), created, taskId]);
-    }
-    await this.recalculatePlan(planId);
-    await this.persist();
-  }
-
-  async deletePlan(id) { this.db.run('DELETE FROM plans WHERE id=?', [id]); await this.persist(); }
-
-  async duplicatePlan(planId) {
-    const plan = this.getPlan(planId);
-    if (!plan) return null;
-    const milestones = this.getMilestones(planId);
-    const tasks = this.getTasks(planId);
-    const newId = uid('plan');
-    const created = now();
-    this.db.run('BEGIN');
-    try {
-      this.db.run(`INSERT INTO plans VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [newId, plan.title + ' (副本)', plan.source_url, plan.description, plan.category, plan.difficulty, 'not_started', 0, plan.estimated_hours || 0, created, created, null]);
-      for (const m of milestones) {
-        const mid = uid('milestone');
-        this.db.run(`INSERT INTO milestones VALUES (?, ?, ?, ?, ?)`, [mid, newId, m.title, m.description || '', m.order_index]);
-        const mTasks = tasks.filter(t => t.milestone_id === m.id);
-        for (const t of mTasks) {
-          const tid = uid('task');
-          this.db.run(`INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [tid, newId, mid, t.title, t.description || '', 'todo', 0, t.estimated_minutes || 0, 0, t.priority || 'medium', t.order_index, created, created, null]);
-        }
-      }
-      this.db.run('COMMIT');
-      await this.persist();
-      return newId;
-    } catch (e) { this.db.run('ROLLBACK'); throw e; }
+    const res = await api('POST', '/api/plans', plan);
+    return res.ok ? res.id : null;
   }
 
   async updatePlan(id, patch) {
-    const plan = this.getPlan(id);
-    if (!plan) return;
-    const next = { ...plan, ...patch, updated_at: now() };
-    this.db.run(`UPDATE plans SET title=?, description=?, category=?, difficulty=?, source_url=?, estimated_hours=?, updated_at=? WHERE id=?`, [next.title, next.description, next.category, next.difficulty, next.source_url, next.estimated_hours, next.updated_at, id]);
-    await this.persist();
+    const res = await api('PUT', `/api/plans/${id}`, patch);
+    return res.ok;
   }
 
-  async createMilestone(planId, title, description = '', orderIndex = null) {
-    const id = uid('milestone');
-    const created = now();
-    const milestones = this.getMilestones(planId);
-    const idx = orderIndex || (milestones.length > 0 ? Math.max(...milestones.map(m => m.order_index)) + 1 : 1);
-    this.db.run(`INSERT INTO milestones VALUES (?, ?, ?, ?, ?)`, [id, planId, title, description, idx]);
-    await this.persist();
-    return id;
+  async deletePlan(id) {
+    const res = await api('DELETE', `/api/plans/${id}`);
+    return res.ok;
+  }
+
+  async duplicatePlan(id) {
+    const res = await api('POST', `/api/plans/${id}/duplicate`);
+    return res.ok ? res.id : null;
+  }
+
+  // ---- Milestones ----
+  async createMilestone(planId, title, description = '') {
+    const res = await api('POST', `/api/plans/${planId}/milestones`, { title, description });
+    return res.ok ? res.id : null;
+  }
+
+  async createTask(milestoneId, planId, title, description = '', estimatedMinutes = 60, priority = 'medium') {
+    const res = await api('POST', `/api/milestones/${milestoneId}/tasks`, { planId, title, description, estimatedMinutes, priority });
+    return res.ok ? res.id : null;
   }
 
   async updateMilestone(id, patch) {
-    const sets = Object.entries(patch).map(([k, v]) => `${k}=?`).join(',');
-    const vals = Object.values(patch);
-    this.db.run(`UPDATE milestones SET ${sets} WHERE id=?`, [...vals, id]);
-    await this.persist();
+    const res = await api('PUT', `/api/milestones/${id}`, patch);
+    return res.ok;
   }
 
   async deleteMilestone(id) {
-    this.db.run('DELETE FROM tasks WHERE milestone_id=?', [id]);
-    this.db.run('DELETE FROM milestones WHERE id=?', [id]);
-    await this.persist();
+    const res = await api('DELETE', `/api/milestones/${id}`);
+    return res.ok;
   }
 
-  async addTaskToMilestone(planId, milestoneId, title, description = '', estimatedMinutes = 60, priority = 'medium') {
-    const id = uid('task');
-    const created = now();
-    const tasks = this.rows('SELECT order_index FROM tasks WHERE milestone_id=? ORDER BY order_index DESC LIMIT 1', [milestoneId]);
-    const orderIndex = tasks.length > 0 ? tasks[0].order_index + 1 : 1;
-    this.db.run(`INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [id, planId, milestoneId, title, description, 'todo', 0, estimatedMinutes, 0, priority, orderIndex, created, created, null]);
-    await this.persist();
-    return id;
+  // ---- Tasks ----
+  async updateTask(id, patch) {
+    const res = await api('PUT', `/api/plans/${patch.plan_id || ''}/tasks/${id}`, patch);
+    return res.ok;
   }
 
-  async recalculatePlan(planId) {
-    const tasks = this.getTasks(planId);
-    const progress = tasks.length ? Math.round(tasks.reduce((s, t) => s + Number(t.progress || 0), 0) / tasks.length) : 0;
-    const status = progress >= 100 ? 'completed' : progress > 0 ? 'in_progress' : 'not_started';
-    this.db.run('UPDATE plans SET progress=?, status=?, updated_at=?, completed_at=? WHERE id=?', [progress, status, now(), status === 'completed' ? now() : null, planId]);
+  // ---- Logs ----
+  async createLog({ planId, taskId, summary, durationMinutes, notes }) {
+    const res = await api('POST', `/api/plans/${planId}/logs`, { taskId, summary, durationMinutes, notes });
+    return res.ok ? res.id : null;
   }
 
-  getStats() {
-    const planStats = this.rows(`SELECT COUNT(*) total, SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) completed, AVG(progress) avg_progress FROM plans`)[0];
-    const time = this.rows(`SELECT COALESCE(SUM(duration_minutes),0) total_minutes, COALESCE(SUM(CASE WHEN date=date('now') THEN duration_minutes ELSE 0 END),0) today_minutes FROM logs`)[0];
-    return { ...planStats, ...time };
+  async getLogs(planId = null) {
+    const path = planId ? `/api/plans/${planId}/logs` : '/api/logs';
+    const res = await api('GET', path);
+    return res.ok ? (res.logs || []) : [];
   }
 
-  exportDb() {
-    const blob = new Blob([this.db.export()], { type: 'application/x-sqlite3' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `learning-tracker-${this.userId}-${new Date().toISOString().slice(0,10)}.db`;
-    a.click(); URL.revokeObjectURL(a.href);
+  // ---- Stats ----
+  async getStats() {
+    const res = await api('GET', '/api/stats');
+    if (res.ok) return res.stats;
+    return { total: 0, completed: 0, avg_progress: 0, total_minutes: 0 };
   }
 
-  async importDb(file) {
-    const bytes = new Uint8Array(await file.arrayBuffer());
-    this.db.close();
-    this.db = new this.SQL.Database(bytes);
-    this.createSchema();
-    await this.persist();
+  // ---- Recalculate (handled by server) ----
+  async recalculatePlan() { /* server handles this */ }
+
+  // ---- Import/Export (handled by server in future) ----
+  exportDb() { toast('MySQL 数据存储在服务端，无需导出'); }
+  async importDb() { toast('MySQL 数据存储在服务端，无需导入'); }
+
+  // ---- Helper: rows() for backward compat with taskCard ----
+  async rows(sql, params = []) {
+    // This is only used for reading task logs — fetch from plan detail API
+    return [];
   }
 }
