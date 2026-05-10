@@ -8,9 +8,13 @@ let currentPlanId = null;
 
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
-function toast(msg) { $('#toast').textContent = msg; $('#toast').classList.remove('hidden'); setTimeout(() => $('#toast').classList.add('hidden'), 2200); }
+function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.remove('hidden'); setTimeout(() => t.classList.add('hidden'), 2200); }
+function showLoading(msg = '加载中...') { $('#loading-text').textContent = msg; $('#loading').classList.remove('hidden'); }
+function hideLoading() { $('#loading').classList.add('hidden'); }
 function minutes(m) { const h = Math.floor((m || 0) / 60); const min = (m || 0) % 60; return h ? `${h}h ${min}m` : `${min}m`; }
 function statusText(s) { return ({not_started:'未开始', in_progress:'进行中', paused:'暂停', completed:'已完成', todo:'待办', doing:'进行中', done:'已完成'})[s] || s; }
+function pctClass(v) { const n = Number(v || 0); return n >= 70 ? 'pct-high' : n >= 30 ? 'pct-mid' : 'pct-low'; }
+function progBarClass(v) { const n = Number(v || 0); return n >= 70 ? 'progress-high' : n >= 30 ? 'progress-mid' : 'progress-low'; }
 
 async function boot() {
   bindAuth();
@@ -20,16 +24,30 @@ async function boot() {
 function bindAuth() {
   $('#login-form').addEventListener('submit', async (e) => {
     e.preventDefault();
+    $('#login-error').textContent = '';
     const ok = await Auth.login($('#username').value.trim(), $('#password').value);
     if (ok) await showApp();
     else $('#login-error').textContent = '用户名或密码错误';
   });
+  $('#username').oninput = () => $('#login-error').textContent = '';
+  $('#password').oninput = () => $('#login-error').textContent = '';
   $('#logout-btn').addEventListener('click', () => { Auth.logout(); showLogin(); });
 }
 
 async function showApp() {
   $('#login-screen').classList.add('hidden'); $('#app').classList.remove('hidden');
-  await db.init(); bindApp(); render();
+  await db.init();
+  // session expiry warning
+  try {
+    const s = JSON.parse(localStorage.getItem('learning_tracker_session') || 'null');
+    if (s && s.expiresAt) {
+      const daysLeft = (s.expiresAt - Date.now()) / 86400000;
+      const sw = $('#session-warning');
+      if (daysLeft < 0) { sw.textContent = '会话已过期，请重新登录。'; sw.classList.remove('hidden'); }
+      else if (daysLeft < 1) { sw.textContent = `会话将在 ${Math.round(daysLeft * 24)} 小时后过期，到期需重新登录。`; sw.classList.remove('hidden'); }
+    }
+  } catch(e) {}
+  bindApp(); render();
 }
 function showLogin() { $('#app').classList.add('hidden'); $('#login-screen').classList.remove('hidden'); }
 
@@ -42,9 +60,11 @@ function bindApp() {
   $('#ai-analyze-plan').onclick = analyzeLinkWithAI;
   $('#plan-form').onsubmit = async (e) => {
     e.preventDefault();
+    showLoading('正在生成计划...');
     const plan = generateLearningPlan({ url: $('#source-url').value, title: $('#plan-title').value, category: $('#plan-category').value, goal: $('#plan-goal').value, difficulty: $('#plan-difficulty').value, hours: $('#plan-hours').value });
     currentPlanId = await db.createPlan(plan);
     resetPlanDialog(e.target);
+    hideLoading();
     toast('快速计划已写入 SQLite'); switchView('detail');
   };
   $('#edit-plan-form').onsubmit = async (e) => {
@@ -63,6 +83,20 @@ function bindApp() {
   };
   $('#cancel-edit-plan').onclick = () => $('#edit-plan-dialog').close();
   $('#confirm-cancel').onclick = () => $('#confirm-dialog').close();
+  $('#cancel-edit-task').onclick = () => $('#edit-task-dialog').close();
+  $('#edit-task-form').onsubmit = async (e) => {
+    e.preventDefault();
+    const tid = $('#edit-task-id').value;
+    await db.updateTask(tid, {
+      title: $('#edit-task-title').value.trim(),
+      description: $('#edit-task-desc').value.trim(),
+      estimatedMinutes: Number($('#edit-task-estimated').value),
+      priority: $('#edit-task-priority').value,
+    });
+    $('#edit-task-dialog').close();
+    toast('任务已更新');
+    render();
+  };
   $('#log-form').onsubmit = async (e) => {
     e.preventDefault();
     await db.createLog({ planId: $('#log-plan-id').value, taskId: $('#log-task-id').value, summary: $('#log-summary').value, durationMinutes: $('#log-duration').value, notes: $('#log-notes').value });
@@ -89,6 +123,7 @@ async function analyzeLinkWithAI() {
   preview.classList.remove('hidden');
   preview.innerHTML = '<b>正在读取链接并生成阶段目标...</b><p>如果服务器没有配置 AI Key，会自动使用链接标题/目录生成增强计划。</p>';
   try {
+    showLoading('AI 分析中，正在读取链接内容...');
     const res = await fetch('/api/analyze-link', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -110,8 +145,10 @@ async function analyzeLinkWithAI() {
       switchView('detail');
     };
   } catch (err) {
-    preview.innerHTML = `<b>AI 分析失败</b><p>${err.message}</p><p>可以先使用“快速生成并保存”。</p>`;
+    hideLoading();
+    preview.innerHTML = `<b>AI 分析失败</b><p>${err.message}</p><p>可以先使用"快速生成并保存"。</p>`;
   } finally {
+    hideLoading();
     btn.disabled = false;
     btn.textContent = 'AI 深度分析';
   }
@@ -135,7 +172,9 @@ function render() {
 
 function renderDashboard() {
   showOnly('#dashboard-view'); $('#view-title').textContent = '仪表盘'; $('#view-subtitle').textContent = '学习数据来自浏览器 SQLite 数据库';
+  $('#back-to-top').classList.add('hidden');
   const stats = db.getStats(); const plans = db.getPlans(); const logs = db.getLogs().slice(0, 6);
+  const emptyPlans = plans.length === 0 ? '<div class="empty-state"><p>还没有学习计划，从链接生成或手动创建</p><button class="hollow" id="empty-new-plan">+ 从链接生成计划</button></div>' : '';
   $('#dashboard-view').innerHTML = `
     <div class="stats-grid">
       <div class="stat"><b>${stats.total || 0}</b><span>学习计划</span></div>
@@ -144,14 +183,16 @@ function renderDashboard() {
       <div class="stat"><b>${minutes(stats.total_minutes || 0)}</b><span>总学习时长</span></div>
     </div>
     <div class="grid-2 layout-gap">
-      <section class="panel"><h3>进行中的计划</h3>${plans.slice(0,4).map(planCard).join('') || '<p class="muted">暂无计划</p>'}</section>
+      <section class="panel"><h3>进行中的计划</h3>${emptyPlans || plans.slice(0,4).map(planCard).join('') || '<p class="muted">暂无计划</p>'}</section>
       <section class="panel"><h3>最近学习日志</h3>${logs.map(logItem).join('') || '<p class="muted">暂无日志</p>'}</section>
     </div>`;
   bindPlanCards();
+  $('#empty-new-plan')?.addEventListener('click', () => $('#plan-dialog').showModal());
 }
 
 function planCard(p) {
-  return `<article class="plan-card" data-plan="${p.id}"><div><h3>${p.title}</h3><p>${p.description || ''}</p><small>${p.category || '未分类'} · ${statusText(p.status)} · ${p.task_count || 0} 任务</small><div class="plan-actions"><button class="ghost-sm" data-edit-plan="${p.id}">编辑</button><button class="ghost-sm" data-duplicate-plan="${p.id}">复制</button><button class="ghost-sm danger" data-delete-plan="${p.id}">删除</button></div></div><div class="progress"><span style="width:${p.progress || 0}%"></span></div><b>${p.progress || 0}%</b></article>`;
+  const pct = Number(p.progress || 0);
+  return `<article class="plan-card" data-plan="${p.id}"><div><h3>${p.title}</h3><p>${p.description || ''}</p><small>${p.category || '未分类'} · ${statusText(p.status)} · ${p.task_count || 0} 任务</small><div class="plan-actions"><button class="ghost-sm" data-edit-plan="${p.id}">编辑</button><button class="ghost-sm" data-duplicate-plan="${p.id}">复制</button><button class="ghost-sm danger" data-delete-plan="${p.id}">删除</button></div></div><div class="progress ${progBarClass(pct)}"><span style="width:${pct}%"></span></div><b class="${pctClass(pct)}">${pct}%</b></article>`;
 }
 function logItem(l) { return `<div class="log-item" data-log-nav="${l.id}" data-log-plan="${l.plan_id}" style="cursor:pointer"><b>${l.summary}</b><span>${l.plan_title || ''}${l.task_title ? ' · ' + l.task_title : ''}</span><small>${l.date} · ${minutes(l.duration_minutes)}</small></div>`; }
 function bindPlanCards() {
@@ -198,6 +239,7 @@ function editPlanDialog(planId) {
 
 function renderPlans() {
   showOnly('#plans-view'); $('#view-title').textContent = '学习计划'; $('#view-subtitle').textContent = '搜索、筛选、进入详情跟踪任务';
+  $('#back-to-top').classList.add('hidden');
   const plans = db.getPlans();
   $('#plans-view').innerHTML = `<div class="toolbar"><input id="search" placeholder="搜索标题/分类/链接" /><select id="status-filter"><option value="">全部状态</option><option value="not_started">未开始</option><option value="in_progress">进行中</option><option value="completed">已完成</option></select></div><div id="plans-list" class="plans-list"></div>`;
   const draw = () => {
@@ -212,6 +254,14 @@ function renderPlanDetail() {
   if (!currentPlanId) { currentView = 'plans'; return renderPlans(); }
   const plan = db.getPlan(currentPlanId); if (!plan) { currentPlanId = null; return renderPlans(); }
   showOnly('#plan-detail-view'); $('#view-title').textContent = plan.title; $('#view-subtitle').textContent = plan.source_url || '计划详情';
+  $('#back-to-top').classList.remove('hidden');
+  // scroll listener for back-to-top
+  const scroller = document.querySelector('.workspace');
+  const bttHandler = () => {
+    if (!currentPlanId || currentView !== 'detail') return;
+    $('#back-to-top').classList.toggle('hidden', (scroller?.scrollTop || window.scrollY) < 400);
+  };
+  document.addEventListener('scroll', bttHandler, {passive:true});
   const milestones = db.getMilestones(plan.id); const tasks = db.getTasks(plan.id); const logs = db.getLogs(plan.id);
   const tmplKeys = Object.keys(templates);
   $('#plan-detail-view').innerHTML = `<button class="ghost" id="back-plans">← 返回计划</button><section class="panel hero"><div><h2>${plan.title}</h2><p>${plan.description || ''}</p><a href="${plan.source_url}" target="_blank">${plan.source_url || ''}</a></div><div class="big-progress"><b>${plan.progress}%</b><span>完成进度</span></div></section><div class="milestone-toolbar"><select id="template-select"><option value="">套用模板</option>${tmplKeys.map(k => `<option value="${k}">${k}</option>`).join('')}</select><button class="ghost" id="add-milestone-btn">+ 添加阶段</button></div><div class="milestones">${milestones.map(m => milestoneCard(m, tasks.filter(t => t.milestone_id === m.id))).join('')}</div><section class="panel"><h3>本计划日志 <button class="ghost-sm" id="add-plan-log-btn" style="margin-left:8px">+ 添加日志</button></h3>${logs.map(logItem).join('') || '<p class="muted">暂无日志</p>'}</section>`;
@@ -319,19 +369,14 @@ function taskCard(t) {
   const pct = Number(t.progress || 0);
   const safeId = t.id.replace(/[^a-zA-Z0-9]/g,'_');
   const taskLogs = db.rows(`SELECT id, summary, date, duration_minutes, plan_id FROM logs WHERE task_id=? ORDER BY created_at DESC`, [t.id]);
-  return `<div class="task" id="task-${safeId}"><div><b>${t.title}</b><p>${t.description || ''}</p><small>${statusText(t.status)} · 预计 ${minutes(t.estimated_minutes)} · 已学 ${minutes(t.spent_minutes)}</small><div class="progress"><span style="width:${pct}%"></span></div></div><div class="task-actions"><button data-task-log="${t.id}">记日志</button><label class="slider-label"><input type="range" min="0" max="100" value="${pct}" class="progress-slider" data-task-progress="${t.id}" /><span class="slider-val" id="slider-val-${safeId}">${pct}%</span></label><button class="ghost-sm" data-task-logs-toggle="${t.id}">📝 ${taskLogs.length}</button></div><div class="task-logs hidden" id="task-logs-${safeId}">${taskLogs.map(l => `<div class="task-log-entry" data-log-nav="${l.id}" data-log-plan="${l.plan_id}"><span>${l.summary}</span><small>${l.date} · ${minutes(l.duration_minutes)}</small></div>`).join('') || '<small class="muted">暂无日志</small>'}</div></div>`;
+  const pCls = pctClass(pct);
+  const bCls = progBarClass(pct);
+  return `<div class="task" id="task-${safeId}"><div><b>${t.title}</b><p>${t.description || ''}</p><small>${statusText(t.status)} · 预计 ${minutes(t.estimated_minutes)} · 已学 ${minutes(t.spent_minutes)}</small><div class="progress ${bCls}"><span style="width:${pct}%"></span></div></div><div class="task-actions"><button data-task-log="${t.id}">记日志</button><label class="slider-label"><input type="range" min="0" max="100" value="${pct}" class="progress-slider" data-task-progress="${t.id}" /><span class="slider-val ${pCls}" id="slider-val-${safeId}">${pct}%</span></label><div><button class="ghost-sm task-edit-btn" data-task-edit="${t.id}" title="编辑任务">✎</button><button class="ghost-sm" data-task-logs-toggle="${t.id}" title="查看日志">📝 ${taskLogs.length}</button></div></div><div class="task-logs hidden" id="task-logs-${safeId}">${taskLogs.map(l => `<div class="task-log-entry" data-log-nav="${l.id}" data-log-plan="${l.plan_id}"><span>${l.summary}</span><small>${l.date} · ${minutes(l.duration_minutes)}</small></div>`).join('') || '<small class="muted">暂无日志</small>'}</div></div>`;
 }
 function bindTaskButtons() {
   $$('[data-task-log]').forEach(b => b.onclick = () => { $('#log-plan-id').value = currentPlanId; $('#log-task-id').value = b.dataset.taskLog; $('#log-dialog').showModal(); });
   $$('[data-task-progress]').forEach(slider => {
-    slider.oninput = async () => {
-      const val = Number(slider.value);
-      const status = val >= 100 ? 'done' : val > 0 ? 'doing' : 'todo';
-      await db.updateTask(slider.dataset.taskProgress, { progress: val, status });
-      const safeId = slider.dataset.taskProgress.replace(/[^a-zA-Z0-9]/g,'_');
-      const valSpan = document.getElementById('slider-val-' + safeId);
-      if (valSpan) valSpan.textContent = val + '%';
-    };
+    // already handled by enhanced slider binding in bindTaskButtons()
   });
   $$('[data-task-logs-toggle]').forEach(b => b.onclick = () => {
     const safeId = b.dataset.taskLogsToggle.replace(/[^a-zA-Z0-9]/g,'_');
@@ -343,6 +388,44 @@ function bindTaskButtons() {
     if (planId) { currentPlanId = planId; currentView = 'detail'; }
     else { currentView = 'logs'; }
     render();
+  });
+  // task edit
+  $$('[data-task-edit]').forEach(b => b.onclick = (e) => {
+    e.stopPropagation();
+    const task = db.rows('SELECT * FROM tasks WHERE id=?', [b.dataset.taskEdit])[0];
+    if (!task) return;
+    $('#edit-task-id').value = task.id;
+    $('#edit-task-plan-id').value = task.plan_id;
+    $('#edit-task-milestone-id').value = task.milestone_id;
+    $('#edit-task-title').value = task.title;
+    $('#edit-task-desc').value = task.description || '';
+    $('#edit-task-estimated').value = task.estimated_minutes || 60;
+    $('#edit-task-priority').value = task.priority || 'medium';
+    $('#edit-task-dialog').showModal();
+  });
+  // progress slider color update
+  $$('.progress-slider').forEach(slider => {
+    slider.oninput = async () => {
+      const val = Number(slider.value);
+      const status = val >= 100 ? 'done' : val > 0 ? 'doing' : 'todo';
+      await db.updateTask(slider.dataset.taskProgress, { progress: val, status });
+      const safeId = slider.dataset.taskProgress.replace(/[^a-zA-Z0-9]/g,'_');
+      const valSpan = document.getElementById('slider-val-' + safeId);
+      if (valSpan) {
+        valSpan.textContent = val + '%';
+        valSpan.className = 'slider-val ' + pctClass(val);
+      }
+      // update progress bar color
+      const taskEl = slider.closest('.task');
+      if (taskEl) {
+        const bar = taskEl.querySelector('.progress');
+        if (bar) {
+          bar.className = 'progress ' + progBarClass(val);
+          const span = bar.querySelector('span');
+          if (span) span.style.width = val + '%';
+        }
+      }
+    };
   });
 }
 
