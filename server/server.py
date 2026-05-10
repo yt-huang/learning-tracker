@@ -6,6 +6,8 @@ All data stored in MySQL. Zero browser-side persistence.
 from __future__ import annotations
 
 import base64
+import datetime
+import decimal
 import hashlib
 import html
 import json
@@ -406,7 +408,15 @@ class Handler(SimpleHTTPRequestHandler):
         super().end_headers()
 
     def send_json(self, status: int, payload: dict):
-        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        def safe(obj):
+            if isinstance(obj, decimal.Decimal):
+                return float(obj)
+            if isinstance(obj, datetime.datetime):
+                return obj.strftime("%Y-%m-%d %H:%M:%S")
+            if isinstance(obj, datetime.date):
+                return obj.isoformat()
+            return str(obj)
+        data = json.dumps(payload, ensure_ascii=False, default=safe).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
