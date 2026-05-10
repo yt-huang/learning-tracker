@@ -615,7 +615,8 @@ class Handler(SimpleHTTPRequestHandler):
             return self.handle_auth_me()
         if base == "/api/admin/users":
             return self.handle_admin_list_users()
-        return self.send_json(404, {"error": "not_found"})
+        # Serve static files for non-API paths
+        return super().do_GET()
 
     def do_POST(self):
         base, parts = self.parse_path()
