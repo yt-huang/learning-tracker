@@ -4,4 +4,11 @@ services:
     container_name: learning-tracker
     restart: unless-stopped
     ports:
-      - "8010:80"
+      - "8010:8010"
+    environment:
+      PORT: "8010"
+      # Optional OpenAI-compatible AI config. Without a key, backend falls back to heading-based analysis.
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}

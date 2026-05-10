@@ -10,7 +10,13 @@ services:
     container_name: learning-tracker
     restart: unless-stopped
     ports:
-      - "8010:80"
+      - "8010:8010"
+    environment:
+      PORT: "8010"
+      OPENAI_BASE_URL: "\${OPENAI_BASE_URL:-}"
+      OPENAI_MODEL: "\${OPENAI_MODEL:-}"
+      OPENAI_API_KEY: "\${OPENAI_API_KEY:-}"
+      DEEPSEEK_API_KEY: "\${DEEPSEEK_API_KEY:-}"
 YAML
 cd "$APP_DIR"
 sudo docker compose pull

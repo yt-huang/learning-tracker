@@ -38,17 +38,66 @@ function bindApp() {
   $('#cancel-plan').onclick = () => $('#plan-dialog').close();
   $('#cancel-log').onclick = () => $('#log-dialog').close();
   $('#source-url').addEventListener('input', () => { if (!$('#plan-title').value) $('#plan-title').placeholder = inferTitleFromUrl($('#source-url').value); });
+  $('#ai-analyze-plan').onclick = analyzeLinkWithAI;
   $('#plan-form').onsubmit = async (e) => {
     e.preventDefault();
     const plan = generateLearningPlan({ url: $('#source-url').value, title: $('#plan-title').value, category: $('#plan-category').value, goal: $('#plan-goal').value, difficulty: $('#plan-difficulty').value, hours: $('#plan-hours').value });
     currentPlanId = await db.createPlan(plan);
-    e.target.reset(); $('#plan-dialog').close(); toast('计划已写入 SQLite'); switchView('detail');
+    resetPlanDialog(e.target);
+    toast('快速计划已写入 SQLite'); switchView('detail');
   };
   $('#log-form').onsubmit = async (e) => {
     e.preventDefault();
     await db.createLog({ planId: $('#log-plan-id').value, taskId: $('#log-task-id').value, summary: $('#log-summary').value, durationMinutes: $('#log-duration').value, notes: $('#log-notes').value });
     e.target.reset(); $('#log-dialog').close(); toast('学习日志已保存到 SQLite'); render();
   };
+}
+
+function resetPlanDialog(form) {
+  form.reset();
+  $('#ai-analysis-preview').classList.add('hidden');
+  $('#ai-analysis-preview').innerHTML = '';
+  $('#ai-analyze-plan').disabled = false;
+  $('#ai-analyze-plan').textContent = 'AI 深度分析';
+  $('#plan-dialog').close();
+}
+
+async function analyzeLinkWithAI() {
+  const url = $('#source-url').value.trim();
+  if (!url) return toast('请先输入学习链接');
+  const preview = $('#ai-analysis-preview');
+  const btn = $('#ai-analyze-plan');
+  btn.disabled = true;
+  btn.textContent = 'AI 分析中...';
+  preview.classList.remove('hidden');
+  preview.innerHTML = '<b>正在读取链接并生成阶段目标...</b><p>如果服务器没有配置 AI Key，会自动使用链接标题/目录生成增强计划。</p>';
+  try {
+    const res = await fetch('/api/analyze-link', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        url,
+        goal: $('#plan-goal').value,
+        level: $('#plan-difficulty').value,
+        hoursPerWeek: Math.max(1, Math.round(Number($('#plan-hours').value || 12) / 3)),
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || 'AI 分析失败');
+    const plan = data.plan;
+    preview.innerHTML = `<b>${plan.aiUsed ? 'AI 已生成计划' : '已生成增强计划'}</b><p>${plan.analysisSummary || plan.description || ''}</p><ul><li>标题：${plan.title}</li><li>阶段：${plan.milestones?.length || 0} 个</li><li>预计：${plan.estimatedHours || 0} 小时</li></ul><button type="button" class="primary" id="save-ai-plan">保存 AI 计划到 SQLite</button>`;
+    $('#save-ai-plan').onclick = async () => {
+      currentPlanId = await db.createPlan(plan);
+      resetPlanDialog($('#plan-form'));
+      toast('AI 计划已写入 SQLite');
+      switchView('detail');
+    };
+  } catch (err) {
+    preview.innerHTML = `<b>AI 分析失败</b><p>${err.message}</p><p>可以先使用“快速生成并保存”。</p>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'AI 深度分析';
+  }
 }
 
 function switchView(view) {

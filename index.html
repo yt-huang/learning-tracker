@@ -53,8 +53,9 @@
   </main>
 
   <dialog id="plan-dialog" class="modal">
-    <form id="plan-form" method="dialog">
+      <form id="plan-form" method="dialog">
       <h3>从学习链接生成计划</h3>
+      <p class="modal-note">快速生成离线可用；AI 深度分析会读取链接内容并生成更贴合资料结构的阶段目标和任务。</p>
       <label>学习链接<input id="source-url" placeholder="https://github.com/luongnv89/claude-howto" required /></label>
       <div class="grid-2">
         <label>计划标题<input id="plan-title" placeholder="留空则自动推断" /></label>
@@ -67,9 +68,11 @@
         </label>
         <label>预计总小时<input id="plan-hours" type="number" min="1" value="12" /></label>
       </div>
+      <div id="ai-analysis-preview" class="ai-preview hidden"></div>
       <div class="modal-actions">
         <button type="button" class="ghost" id="cancel-plan">取消</button>
-        <button type="submit" class="primary">生成并保存到 SQLite</button>
+        <button type="button" class="ghost" id="ai-analyze-plan">AI 深度分析</button>
+        <button type="submit" class="primary" id="quick-generate-plan">快速生成并保存</button>
       </div>
     </form>
   </dialog>
