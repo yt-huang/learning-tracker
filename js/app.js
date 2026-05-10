@@ -2,7 +2,7 @@ import { Auth } from './auth.js';
 import { LearningDB } from './db.js';
 import { generateLearningPlan, inferTitleFromUrl, templates } from './planner.js';
 
-const db = new LearningDB();
+let db = null;
 let currentView = 'dashboard';
 let currentPlanId = null;
 
@@ -107,10 +107,14 @@ function showLoginCard() {
 async function showApp() {
   $('#login-screen').classList.add('hidden');
   $('#app').classList.remove('hidden');
+
+  // Create per-user SQLite database
+  const user = Auth.getUser();
+  const userId = user?.id || 'default';
+  db = new LearningDB(userId);
   await db.init();
 
   // Show admin-only nav button
-  const user = Auth.getUser();
   $$('.admin-only').forEach(el => el.classList.toggle('hidden', !Auth.isAdmin()));
 
   // User badge

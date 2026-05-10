@@ -1,12 +1,18 @@
-const IDB_NAME = 'learning-tracker-sqlite';
-const IDB_STORE = 'database';
-const DB_KEY = 'learning-tracker.db';
+const IDB_NAME_PREFIX = 'learning-tracker-sqlite';
+const DB_KEY_PREFIX = 'learning-tracker';
 
 function now() { return new Date().toISOString(); }
 function uid(prefix) { return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`; }
 
 export class LearningDB {
-  constructor() { this.SQL = null; this.db = null; }
+  constructor(userId = 'default') {
+    this.userId = userId;
+    this.SQL = null;
+    this.db = null;
+  }
+
+  getIdbName() { return `${IDB_NAME_PREFIX}-${this.userId}`; }
+  getDbKey() { return `${DB_KEY_PREFIX}-${this.userId}.db`; }
 
   async init() {
     this.SQL = await window.initSqlJs({ locateFile: f => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/${f}` });
@@ -14,6 +20,7 @@ export class LearningDB {
     this.db = bytes ? new this.SQL.Database(bytes) : new this.SQL.Database();
     this.createSchema();
     if (!this.getPlans().length) await this.seed();
+    return this;
   }
 
   createSchema() {
@@ -57,47 +64,55 @@ export class LearningDB {
 
   async persist() {
     const bytes = this.db.export();
+    const idbName = this.getIdbName();
+    const dbKey = this.getDbKey();
     await new Promise((resolve, reject) => {
-      const req = indexedDB.open(IDB_NAME, 1);
-      req.onupgradeneeded = () => req.result.createObjectStore(IDB_STORE);
+      const req = indexedDB.open(idbName, 1);
+      req.onupgradeneeded = () => req.result.createObjectStore('database');
       req.onerror = () => reject(req.error);
       req.onsuccess = () => {
-        const tx = req.result.transaction(IDB_STORE, 'readwrite');
-        tx.objectStore(IDB_STORE).put(bytes, DB_KEY);
-        tx.oncomplete = () => { req.result.close(); resolve(); };
+        const db = req.result;
+        const tx = db.transaction('database', 'readwrite');
+        tx.objectStore('database').put(bytes, dbKey);
+        tx.oncomplete = () => { db.close(); resolve(); };
         tx.onerror = () => reject(tx.error);
       };
     });
   }
 
   async loadBytes() {
+    const idbName = this.getIdbName();
+    const dbKey = this.getDbKey();
     return new Promise((resolve) => {
-      const req = indexedDB.open(IDB_NAME, 1);
-      req.onupgradeneeded = () => req.result.createObjectStore(IDB_STORE);
+      const req = indexedDB.open(idbName, 1);
+      req.onupgradeneeded = () => req.result.createObjectStore('database');
       req.onerror = () => resolve(null);
       req.onsuccess = () => {
         const db = req.result;
-        const tx = db.transaction(IDB_STORE, 'readonly');
-        const get = tx.objectStore(IDB_STORE).get(DB_KEY);
-        get.onsuccess = () => resolve(get.result || null);
-        get.onerror = () => resolve(null);
-        tx.oncomplete = () => db.close();
+        const tx = db.transaction('database', 'readonly');
+        const get = tx.objectStore('database').get(dbKey);
+        get.onsuccess = () => { resolve(get.result || null); db.close(); };
+        get.onerror = () => { resolve(null); db.close(); };
       };
     });
   }
 
   async seed() {
     await this.createPlan({
-      title: 'luongnv89/claude-howto', sourceUrl: 'https://github.com/luongnv89/claude-howto',
-      description: 'Claude 使用指南学习计划示例', category: 'AI 工具', difficulty: '进阶', estimatedHours: 10,
+      title: '入门示例：新用户学习模板',
+      sourceUrl: 'https://github.com/',
+      description: '这是你的第一个学习计划，用于快速了解系统功能。可以从链接生成更多计划。',
+      category: '入门',
+      difficulty: '入门',
+      estimatedHours: 2,
       milestones: [
-        { title: '快速理解', description: '理解项目目标与目录', orderIndex: 1, tasks: [
-          { title: '阅读 README', description: '整理核心章节', estimatedMinutes: 60, priority: 'high' },
-          { title: '梳理使用场景', description: '记录适合自己的实践场景', estimatedMinutes: 45, priority: 'medium' }
+        { title: '了解系统', description: '熟悉 Learning Tracker 界面与操作', orderIndex: 1, tasks: [
+          { title: '探索仪表盘', description: '查看统计卡片和学习日志', estimatedMinutes: 15, priority: 'medium' },
+          { title: '尝试进度滑块', description: '打开一个任务，拖动进度条试试', estimatedMinutes: 10, priority: 'medium' }
         ]},
-        { title: '实践输出', description: '复现实例并总结', orderIndex: 2, tasks: [
-          { title: '复现关键示例', description: '运行或手动演练关键步骤', estimatedMinutes: 120, priority: 'high' },
-          { title: '完成学习总结', description: '输出一页笔记', estimatedMinutes: 60, priority: 'medium' }
+        { title: '创建学习计划', description: '用链接生成器创建一个正式计划', orderIndex: 2, tasks: [
+          { title: '用 AI 分析生成', description: '输入一个学习链接，点击 AI 深度分析', estimatedMinutes: 20, priority: 'high' },
+          { title: '记录学习日志', description: '在任务下方点击「记日志」写笔记', estimatedMinutes: 15, priority: 'medium' }
         ]}
       ]
     });
@@ -241,7 +256,7 @@ export class LearningDB {
     const blob = new Blob([this.db.export()], { type: 'application/x-sqlite3' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `learning-tracker-${new Date().toISOString().slice(0,10)}.db`;
+    a.download = `learning-tracker-${this.userId}-${new Date().toISOString().slice(0,10)}.db`;
     a.click(); URL.revokeObjectURL(a.href);
   }
 

@@ -662,10 +662,10 @@ def main():
         ts = now_iso()
         db.execute(
             "INSERT INTO users (id, username, password_hash, email, role, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (uid, "admin", pwh, "", "admin", 1, ts, ts),
+            (uid, "admin@cpaas.io", pwh, "", "admin", 1, ts, ts),
         )
         db.commit()
-        print("ℹ️  Created default admin user: admin / admin123", file=sys.stderr, flush=True)
+        print("ℹ️  Created default admin user: admin@cpaas.io / 07Apples@", file=sys.stderr, flush=True)
     db.close()
 
     os.chdir(ROOT)
