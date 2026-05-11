@@ -133,11 +133,20 @@ function bindApp() {
 
   $('#edit-task-form').onsubmit = async (e) => {
     e.preventDefault();
+    const mode = $('#edit-task-mode').value;
     const tid = $('#edit-task-id').value;
-    const ok = await db.updateTask(tid, { title: $('#edit-task-title').value.trim(), description: $('#edit-task-desc').value.trim(), estimated_minutes: Number($('#edit-task-estimated').value), priority: $('#edit-task-priority').value, plan_id: $('#edit-task-plan-id').value });
+    let ok;
+    if (mode === 'create') {
+      const mid = $('#edit-task-milestone-id').value;
+      const pid = $('#edit-task-plan-id').value;
+      const newId = await db.createTask(mid, pid, $('#edit-task-title').value.trim(), $('#edit-task-desc').value.trim(), Number($('#edit-task-estimated').value), $('#edit-task-priority').value);
+      ok = !!newId;
+    } else {
+      ok = await db.updateTask(tid, { title: $('#edit-task-title').value.trim(), description: $('#edit-task-desc').value.trim(), estimated_minutes: Number($('#edit-task-estimated').value), priority: $('#edit-task-priority').value, plan_id: $('#edit-task-plan-id').value });
+    }
     $('#edit-task-dialog').close();
-    if (ok) { toast('任务已更新'); await render(); }
-    else toast('更新失败');
+    if (ok) { toast(mode === 'create' ? '任务已添加' : '任务已更新'); await render(); }
+    else toast(mode === 'create' ? '添加失败' : '更新失败');
   };
 
   $('#log-form').onsubmit = async (e) => {
@@ -353,6 +362,7 @@ function milestoneCard(m, logsByTask) {
     <div class="milestone-header">
       <span class="milestone-title" data-milestone-edit="${m.id}">${m.title}</span>
       <div class="milestone-actions">
+        <button class="ghost-sm" data-task-create="${m.id}" title="添加任务">+ 任务</button>
         <button class="ghost-sm" data-milestone-up="${m.id}" title="上移">↑</button>
         <button class="ghost-sm" data-milestone-down="${m.id}" title="下移">↓</button>
         <button class="ghost-sm danger" data-milestone-del="${m.id}" title="删除">✕</button>
@@ -396,12 +406,15 @@ function bindTaskButtons() {
     let task = null;
     for (const m of (planData.milestones || [])) { const t = (m.tasks || []).find(x => x.id === b.dataset.taskEdit); if (t) { task = t; break; } }
     if (!task) return;
+    $('#edit-task-mode').value = 'edit';
     $('#edit-task-id').value = task.id;
+    $('#edit-task-milestone-id').value = '';
     $('#edit-task-plan-id').value = pid;
     $('#edit-task-title').value = task.title;
     $('#edit-task-desc').value = task.description || '';
     $('#edit-task-estimated').value = task.estimated_minutes || 60;
     $('#edit-task-priority').value = task.priority || 'medium';
+    $('#edit-task-title-text').textContent = '编辑任务';
     $('#edit-task-dialog').showModal();
   });
 }
@@ -434,8 +447,25 @@ function bindPlanDetailMilestones(planId, milestones) {
   $$('[data-milestone-down]').forEach(async b => b.onclick = async () => { /* TODO: reorder */ await render(); });
   $$('[data-milestone-del]').forEach(b => b.onclick = () => {
     $('#confirm-msg').textContent = '确认删除此阶段及其所有任务？';
-    $('#confirm-action').onclick = async () => { await db.deleteMilestone(b.dataset.milestoneDel); $('#confirm-dialog').close(); toast('已删除'); await render(); };
+    $('#confirm-action').onclick = async () => {
+      const ok = await db.deleteMilestone(b.dataset.milestoneDel);
+      $('#confirm-dialog').close();
+      toast(ok ? '已删除' : '删除失败，请刷新后重试');
+      await render();
+    };
     $('#confirm-dialog').showModal();
+  });
+  $$('[data-task-create]').forEach(b => b.onclick = () => {
+    $('#edit-task-mode').value = 'create';
+    $('#edit-task-id').value = '';
+    $('#edit-task-milestone-id').value = b.dataset.taskCreate;
+    $('#edit-task-plan-id').value = planId;
+    $('#edit-task-title').value = '';
+    $('#edit-task-desc').value = '';
+    $('#edit-task-estimated').value = '60';
+    $('#edit-task-priority').value = 'medium';
+    $('#edit-task-title-text').textContent = '新建任务';
+    $('#edit-task-dialog').showModal();
   });
 }
 

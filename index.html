@@ -148,9 +148,11 @@
 
   <dialog id="edit-task-dialog" class="modal">
     <form id="edit-task-form" method="dialog">
-      <h3>编辑任务</h3>
+      <h3 id="edit-task-title-text">编辑任务</h3>
       <input type="hidden" id="edit-task-id" />
       <input type="hidden" id="edit-task-plan-id" />
+      <input type="hidden" id="edit-task-milestone-id" />
+      <input type="hidden" id="edit-task-mode" value="edit" />
       <label>任务标题<input id="edit-task-title" required /></label>
       <label>描述<textarea id="edit-task-desc" rows="2"></textarea></label>
       <div class="grid-2">

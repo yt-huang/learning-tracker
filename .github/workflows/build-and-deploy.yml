@@ -18,6 +18,66 @@ env:
   AI_HUB_PORT: "8020"
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: test_root_pass
+          MYSQL_DATABASE: learning_tracker
+          MYSQL_USER: lt_user
+          MYSQL_PASSWORD: LtTest2024!
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -u root -ptest_root_pass"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq mysql-client
+          pip install pymysql pytest
+      - name: Wait for MySQL
+        run: |
+          for i in $(seq 1 30); do
+            mysqladmin ping -h 127.0.0.1 -u root -ptest_root_pass --silent && break
+            sleep 2
+          done
+      - name: Run API tests
+        env:
+          MYSQL_HOST: 127.0.0.1
+          MYSQL_PORT: 3306
+          MYSQL_DB: learning_tracker
+          MYSQL_USER: lt_user
+          MYSQL_PASS: LtTest2024!
+          PORT: 18010
+          ADMIN_USERNAME: admin@cpaas.io
+          ADMIN_PASSWORD: K8sMysql2024!
+        run: |
+          python3 server/server.py &
+          SERVER_PID=$!
+          # Wait for server to start (init_mysql creates tables)
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:18010/ >/dev/null 2>&1 && break
+            sleep 2
+          done
+          # Verify server is up
+          curl -sf http://127.0.0.1:18010/ >/dev/null || { echo "SERVER FAILED TO START"; kill $SERVER_PID 2>/dev/null; exit 1; }
+          # Run tests
+          TEST_BASE_URL=http://127.0.0.1:18010 TEST_USER=admin@cpaas.io TEST_PASS=K8sMysql2024! python3 -m pytest tests/ -v || {
+            echo "TESTS FAILED"
+            kill $SERVER_PID 2>/dev/null || true
+            exit 1
+          }
+          kill $SERVER_PID 2>/dev/null || true
+
   build:
     runs-on: ubuntu-latest
     steps:
@@ -50,7 +110,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=ai-hub
 
   deploy:
-    needs: build
+    needs: [build, test]
     runs-on: ubuntu-latest
     timeout-minutes: 25
     if: github.ref == 'refs/heads/main'

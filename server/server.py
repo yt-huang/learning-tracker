@@ -937,13 +937,16 @@ class Handler(SimpleHTTPRequestHandler):
         user = require_auth(self.headers)
         if not user:
             return self.send_json(401, {"ok": False, "error": "未登录"})
-        conn = get_db()
-        cur = conn.cursor()
-        cur.execute("DELETE FROM tasks WHERE milestone_id=%s AND user_id=%s", (milestone_id, user["id"]))
-        cur.execute("DELETE FROM milestones WHERE id=%s AND user_id=%s", (milestone_id, user["id"]))
-        conn.commit()
-        conn.close()
-        return self.send_json(200, {"ok": True, "message": "已删除"})
+        try:
+            conn = get_db()
+            cur = conn.cursor()
+            cur.execute("DELETE FROM tasks WHERE milestone_id=%s AND user_id=%s", (milestone_id, user["id"]))
+            cur.execute("DELETE FROM milestones WHERE id=%s AND user_id=%s", (milestone_id, user["id"]))
+            conn.commit()
+            conn.close()
+            return self.send_json(200, {"ok": True, "message": "已删除"})
+        except Exception as e:
+            return self.send_json(500, {"ok": False, "error": f"删除失败: {str(e)}"})
 
     def handle_create_milestone(self, plan_id: str):
         user = require_auth(self.headers)
