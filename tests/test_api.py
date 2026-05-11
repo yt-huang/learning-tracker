@@ -51,6 +51,17 @@ class TestAuth(unittest.TestCase):
         else:
             raise RuntimeError(f"Server not reachable at {BASE}")
 
+    def test_register_first_user(self):
+        """First user becomes admin."""
+        resp = api("POST", "/api/auth/register", {
+            "username": ADMIN_USER,
+            "password": ADMIN_PASS,
+            "email": "admin@test.com",
+        })
+        self.assertTrue(resp.get("ok"), f"Register failed: {resp}")
+        self.assertEqual(resp.get("user", {}).get("role"), "admin")
+        self.assertTrue(resp.get("user", {}).get("active"))
+
     def test_login_success(self):
         resp = api("POST", "/api/auth/login", {"username": ADMIN_USER, "password": ADMIN_PASS})
         self.assertTrue(resp.get("ok"), f"Login failed: {resp}")
@@ -82,6 +93,10 @@ class TestPlansMilestonesTasks(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        # Ensure admin user exists (register if first run)
+        api("POST", "/api/auth/register", {
+            "username": ADMIN_USER, "password": ADMIN_PASS, "email": "admin@test.com",
+        })
         resp = api("POST", "/api/auth/login", {"username": ADMIN_USER, "password": ADMIN_PASS})
         if not resp.get("ok"):
             raise RuntimeError(f"Cannot login: {resp}")
@@ -192,7 +207,13 @@ class TestMilestoneCreateDelete(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        # Ensure admin user exists (register if first run)
+        api("POST", "/api/auth/register", {
+            "username": ADMIN_USER, "password": ADMIN_PASS, "email": "admin@test.com",
+        })
         resp = api("POST", "/api/auth/login", {"username": ADMIN_USER, "password": ADMIN_PASS})
+        if not resp.get("ok"):
+            raise RuntimeError(f"Cannot login: {resp}")
         cls.token = resp["token"]
         resp = api("POST", "/api/plans", {
             "title": "Bug Repro Plan",
