@@ -12,14 +12,14 @@
       <div>
         <p class="eyebrow">Internal AI Gateway</p>
         <h1>AI 分析管理后台</h1>
-        <p>统一管理 OpenCode Go / DeepSeek / OpenAI 等 OpenAI-Compatible Provider、模型和 Key，并给内网业务系统提供分析 API。</p>
+        <p>在页面里输入 API URL 和 Key，保存到 MySQL，统一管理 OpenCode Go / DeepSeek / OpenAI 等 OpenAI-Compatible Provider、模型和调用日志。</p>
       </div>
       <button id="logoutBtn" class="ghost hidden">退出</button>
     </header>
 
     <section id="loginView" class="card narrow">
       <h2>管理员登录</h2>
-      <p class="muted">默认账号：admin / admin。生产环境请通过 Docker 环境变量修改。</p>
+      <p class="muted">默认账号：admin / admin。首次进入后直接在页面配置 API URL、Key 和模型。</p>
       <input id="username" placeholder="用户名" value="admin" />
       <input id="password" placeholder="密码" type="password" value="admin" />
       <button id="loginBtn">登录</button>
@@ -35,19 +35,19 @@
       </nav>
 
       <section id="guide" class="panel active">
-        <h2>推荐配置：OpenCode Go</h2>
+        <h2>页面配置：OpenCode Go / DeepSeek / OpenAI</h2>
         <ol>
-          <li>添加 Provider：<code>OpenCode Go</code></li>
-          <li>Base URL 填：<code>https://opencode.ai/zen/go/v1</code></li>
-          <li>API Key 填 OpenCode Go 的 Key，保存后不会明文展示。</li>
-          <li>添加模型：<code>deepseek-v4-pro</code>，勾选默认模型。</li>
+          <li>进入 <b>Provider</b>：输入名称、API URL（Base URL）和 API Key，点击保存。</li>
+          <li>OpenCode Go 示例 API URL：<code>https://opencode.ai/zen/go/v1</code></li>
+          <li>保存后 Key 会加密写入 MySQL，不需要在 Docker 环境变量里传第三方模型 Key。</li>
+          <li>进入 <b>Models</b>：手动添加 <code>deepseek-v4-pro</code>，或从 API 拉取后批量导入，并勾选默认模型。</li>
           <li>点击"测试默认模型"，返回 pong 即配置成功。</li>
         </ol>
-        <h3>Docker Compose 内网调用</h3>
+        <h3>Docker Compose 默认已内置 MySQL</h3>
         <pre>learning-tracker:
   environment:
     AI_HUB_URL: http://ai-hub:8020
-    AI_HUB_TOKEN: ${AI_HUB_INTERNAL_TOKEN}</pre>
+    AI_HUB_TOKEN: dev-internal-token</pre>
         <h3>内部 API 示例</h3>
         <pre>curl -X POST http://127.0.0.1:8020/api/v1/analyze-learning-link \
   -H 'Authorization: Bearer dev-internal-token' \

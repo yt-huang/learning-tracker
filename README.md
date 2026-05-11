@@ -29,19 +29,20 @@
 learning-tracker :8010
   ↓ Docker 内网 HTTP
 ai-hub :8020
+  ↔ MySQL :3306（持久化 Provider/Model/Key/Log）
   ↓ OpenAI-compatible API
 OpenCode Go / DeepSeek / OpenAI / Kimi / Qwen
 ```
 
-`learning-tracker` 不再直接保存第三方模型 Key；所有 Key 通过 `AI Hub` 后台写入 SQLite，并用 `AI_HUB_MASTER_KEY` 加密。
+`learning-tracker` 不再直接保存第三方模型 Key；所有 API URL、Key、模型和调用日志通过 `AI Hub` 后台写入 MySQL，并用 `AI_HUB_MASTER_KEY` 加密 Key。
 
 ## 本地 Docker 运行
 
 ```bash
-cp .env.example .env
-# 建议修改 .env 里的 token/master key
 docker compose up -d --build
 ```
+
+默认 Compose 已内置 MySQL 和开发可用账号密码；第三方模型 API URL/Key 在 AI Hub 页面录入，不需要写入环境变量。
 
 访问：
 
@@ -94,12 +95,12 @@ qwen3.6-plus
 
 ## 内网 API
 
-`learning-tracker` 通过以下环境变量接入：
+`learning-tracker` 默认通过 Docker 内网接入：
 
 ```yaml
 environment:
   AI_HUB_URL: http://ai-hub:8020
-  AI_HUB_TOKEN: ${AI_HUB_INTERNAL_TOKEN}
+  AI_HUB_TOKEN: dev-internal-token
 ```
 
 手动测试：
@@ -131,8 +132,8 @@ Learning Tracker 业务数据表：
 AI Hub 数据库：
 
 ```text
-Docker volume: ai_hub_data
-SQLite path: /data/ai_hub.db
+Docker volume: ai_hub_mysql
+MySQL database: ai_hub
 ```
 
 包含：

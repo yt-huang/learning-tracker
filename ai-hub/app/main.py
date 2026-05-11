@@ -5,10 +5,23 @@ from datetime import datetime
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+try:
+    import pymysql
+    import pymysql.cursors
+except Exception:  # pragma: no cover - local fallback when PyMySQL is not installed
+    pymysql = None
+
 ROOT = Path(__file__).resolve().parent
 STATIC = ROOT / "static"
 PORT = int(os.getenv("PORT", "8020"))
+DB_ENGINE = os.getenv("DB_ENGINE", "mysql").lower()
 DB_PATH = os.getenv("DB_PATH", "/data/ai_hub.db")
+DB_HOST = os.getenv("DB_HOST", "mysql")
+DB_PORT = int(os.getenv("DB_PORT", "3306"))
+DB_NAME = os.getenv("DB_NAME", "ai_hub")
+DB_USER = os.getenv("DB_USER", "ai_hub")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "ai_hub_password")
+USE_MYSQL = DB_ENGINE != "sqlite" and pymysql is not None
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin")
 ADMIN_TOKEN = os.getenv("AI_HUB_ADMIN_TOKEN", "dev-admin-token")
@@ -20,16 +33,100 @@ HTTP_TIMEOUT = int(os.getenv("HTTP_TIMEOUT", "30"))
 
 def now(): return datetime.utcnow().isoformat()
 
+def _sql(sql: str) -> str:
+    """Use sqlite-style ? placeholders in code and translate them for MySQL."""
+    return sql.replace('?', '%s') if USE_MYSQL else sql
+
+
+DB_INTEGRITY_ERROR = (sqlite3.IntegrityError,) + ((pymysql.err.IntegrityError,) if pymysql else ())
+DB_OPERATION_ERROR = (sqlite3.OperationalError,) + ((pymysql.err.OperationalError,) if pymysql else ())
+
+
 def db():
+    if USE_MYSQL:
+        return pymysql.connect(
+            host=DB_HOST,
+            port=DB_PORT,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            database=DB_NAME,
+            charset='utf8mb4',
+            autocommit=False,
+            cursorclass=pymysql.cursors.DictCursor,
+        )
     Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(DB_PATH)
     con.row_factory = sqlite3.Row
     return con
 
 
+def execute(con, sql, params=()):
+    if USE_MYSQL:
+        cur = con.cursor()
+        cur.execute(_sql(sql), params)
+        return cur
+    return con.execute(_sql(sql), params)
+
+
+def scalar(con, sql, params=()):
+    row = execute(con, sql, params).fetchone()
+    if row is None:
+        return None
+    if isinstance(row, dict):
+        return next(iter(row.values()))
+    return row[0]
+
+
+def _executescript(con, script: str):
+    if USE_MYSQL:
+        for stmt in [s.strip() for s in script.split(';') if s.strip()]:
+            execute(con, stmt)
+    else:
+        con.executescript(script)
+
+
 def init_db():
-    with db() as con:
-        con.executescript('''
+    mysql_schema = '''
+        CREATE TABLE IF NOT EXISTS providers(
+          id INTEGER PRIMARY KEY AUTO_INCREMENT,
+          name VARCHAR(191) UNIQUE NOT NULL,
+          base_url TEXT NOT NULL,
+          api_key_encrypted TEXT NOT NULL,
+          proxy TEXT DEFAULT NULL,
+          enabled TINYINT NOT NULL DEFAULT 1,
+          created_at VARCHAR(64) NOT NULL,
+          updated_at VARCHAR(64) NOT NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        CREATE TABLE IF NOT EXISTS models(
+          id INTEGER PRIMARY KEY AUTO_INCREMENT,
+          provider_id INTEGER NOT NULL,
+          model_id VARCHAR(191) NOT NULL,
+          display_name TEXT DEFAULT NULL,
+          purpose VARCHAR(128) DEFAULT 'learning_plan',
+          temperature DOUBLE DEFAULT 0.3,
+          max_tokens INTEGER DEFAULT 4096,
+          is_default TINYINT DEFAULT 0,
+          enabled TINYINT DEFAULT 1,
+          created_at VARCHAR(64) NOT NULL,
+          updated_at VARCHAR(64) NOT NULL,
+          INDEX idx_models_provider_id(provider_id),
+          UNIQUE KEY uq_models_provider_model(provider_id, model_id),
+          CONSTRAINT fk_models_provider FOREIGN KEY(provider_id) REFERENCES providers(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        CREATE TABLE IF NOT EXISTS call_logs(
+          id INTEGER PRIMARY KEY AUTO_INCREMENT,
+          client_name VARCHAR(191) DEFAULT 'unknown',
+          template VARCHAR(128) DEFAULT 'learning_plan',
+          provider_name VARCHAR(191) DEFAULT '',
+          model_id VARCHAR(191) DEFAULT '',
+          success TINYINT DEFAULT 0,
+          latency_ms INTEGER DEFAULT 0,
+          error_message TEXT DEFAULT NULL,
+          error_detail TEXT DEFAULT NULL,
+          created_at VARCHAR(64) NOT NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    '''
+    sqlite_schema = '''
         CREATE TABLE IF NOT EXISTS providers(
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           name TEXT UNIQUE NOT NULL,
@@ -51,7 +148,8 @@ def init_db():
           is_default INTEGER DEFAULT 0,
           enabled INTEGER DEFAULT 1,
           created_at TEXT NOT NULL,
-          updated_at TEXT NOT NULL
+          updated_at TEXT NOT NULL,
+          UNIQUE(provider_id, model_id)
         );
         CREATE TABLE IF NOT EXISTS call_logs(
           id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -65,13 +163,25 @@ def init_db():
           error_detail TEXT DEFAULT '',
           created_at TEXT NOT NULL
         );
-        ''')
-        # Migrate: add proxy column if missing in existing table
-        try: con.execute('ALTER TABLE providers ADD COLUMN proxy TEXT DEFAULT \"\"')
-        except sqlite3.OperationalError: pass
-        # Migrate: add error_detail column if missing
-        try: con.execute('ALTER TABLE call_logs ADD COLUMN error_detail TEXT DEFAULT \"\"')
-        except sqlite3.OperationalError: pass
+    '''
+    last_error = None
+    for attempt in range(30 if USE_MYSQL else 1):
+        try:
+            with db() as con:
+                _executescript(con, mysql_schema if USE_MYSQL else sqlite_schema)
+                # Migrate older SQLite/MySQL data volumes.
+                try: execute(con, 'ALTER TABLE providers ADD COLUMN proxy TEXT' if USE_MYSQL else 'ALTER TABLE providers ADD COLUMN proxy TEXT DEFAULT ""')
+                except DB_OPERATION_ERROR: pass
+                try: execute(con, 'ALTER TABLE call_logs ADD COLUMN error_detail TEXT' if USE_MYSQL else 'ALTER TABLE call_logs ADD COLUMN error_detail TEXT DEFAULT ""')
+                except DB_OPERATION_ERROR: pass
+                con.commit()
+                return
+        except Exception as e:
+            last_error = e
+            if not USE_MYSQL:
+                raise
+            time.sleep(1)
+    raise RuntimeError(f'MySQL 初始化失败，请检查 mysql 服务是否健康: {last_error}')
 
 
 def keystream(n:int)->bytes:
@@ -120,6 +230,16 @@ def fetch_url(url, timeout=45, proxy=''):
     if m: enc=m.group(1).strip()
     return raw.decode(enc,errors='replace'), ctype
 
+def fetch_provider_json(base_url, api_key, path, timeout=HTTP_TIMEOUT, proxy=''):
+    opener = build_opener(proxy)
+    headers = {'User-Agent':'AIAnalysisHub/0.1','Accept':'application/json'}
+    if api_key:
+        headers['Authorization'] = f'Bearer {api_key}'
+    req = urllib.request.Request(base_url.rstrip('/') + path, headers=headers)
+    with opener.open(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode())
+
+
 def markdown_headings(text):
     out=[]
     for line in text.splitlines():
@@ -163,8 +283,8 @@ def extract_json(text):
     except json.JSONDecodeError: return json.loads(text[text.find('{'):text.rfind('}')+1])
 
 def select_model(con):
-    q='''SELECT m.*, p.name provider_name, p.base_url, p.api_key_encrypted FROM models m JOIN providers p ON p.id=m.provider_id WHERE m.enabled=1 AND p.enabled=1 ORDER BY m.is_default DESC, m.id DESC LIMIT 1'''
-    row=con.execute(q).fetchone()
+    q='''SELECT m.*, p.name provider_name, p.base_url, p.api_key_encrypted, p.proxy FROM models m JOIN providers p ON p.id=m.provider_id WHERE m.enabled=1 AND p.enabled=1 ORDER BY m.is_default DESC, m.id DESC LIMIT 1'''
+    row=execute(con, q).fetchone()
     if not row: raise RuntimeError('请先在 AI Hub 后台配置并启用 Provider 和 Model')
     return dict(row)
 
@@ -188,16 +308,16 @@ class Handler(SimpleHTTPRequestHandler):
             self.path = '/admin.html'
             return super().do_GET()
         if self.path=='/health':
-            with db() as con: return self.send_json(200, {'ok':True,'providers':con.execute('select count(*) from providers').fetchone()[0],'models':con.execute('select count(*) from models').fetchone()[0]})
+            with db() as con: return self.send_json(200, {'ok':True,'dbEngine':'mysql' if USE_MYSQL else 'sqlite','providers':scalar(con, 'select count(*) from providers'),'models':scalar(con, 'select count(*) from models')})
         if self.path.startswith('/api/admin/'):
             if not require_admin(self): return
             with db() as con:
                 if self.path=='/api/admin/providers':
-                    rows=con.execute('select * from providers order by id desc').fetchall(); return self.send_json(200, {'items':[dict(id=r['id'],name=r['name'],baseUrl=r['base_url'],apiKeyMasked='********' if r['api_key_encrypted'] else '', proxy=r['proxy'] or '', enabled=bool(r['enabled']),createdAt=r['created_at'],updatedAt=r['updated_at']) for r in rows]})
+                    rows=execute(con, 'select * from providers order by id desc').fetchall(); return self.send_json(200, {'items':[dict(id=r['id'],name=r['name'],baseUrl=r['base_url'],apiKeyMasked='********' if r['api_key_encrypted'] else '', proxy=r['proxy'] or '', enabled=bool(r['enabled']),createdAt=r['created_at'],updatedAt=r['updated_at']) for r in rows]})
                 if self.path=='/api/admin/models':
-                    rows=con.execute('select m.*,p.name provider_name from models m join providers p on p.id=m.provider_id order by m.is_default desc,m.id desc').fetchall(); return self.send_json(200, {'items':[dict(id=r['id'],providerId=r['provider_id'],providerName=r['provider_name'],modelId=r['model_id'],displayName=r['display_name'],purpose=r['purpose'],temperature=r['temperature'],maxTokens=r['max_tokens'],isDefault=bool(r['is_default']),enabled=bool(r['enabled'])) for r in rows]})
+                    rows=execute(con, 'select m.*,p.name provider_name from models m join providers p on p.id=m.provider_id order by m.is_default desc,m.id desc').fetchall(); return self.send_json(200, {'items':[dict(id=r['id'],providerId=r['provider_id'],providerName=r['provider_name'],modelId=r['model_id'],displayName=r['display_name'],purpose=r['purpose'],temperature=r['temperature'],maxTokens=r['max_tokens'],isDefault=bool(r['is_default']),enabled=bool(r['enabled'])) for r in rows]})
                 if self.path=='/api/admin/logs':
-                    rows=con.execute('select * from call_logs order by id desc limit 80').fetchall(); return self.send_json(200, {'items':[dict(id=r['id'],clientName=r['client_name'],template=r['template'],provider=r['provider_name'],model=r['model_id'],success=bool(r['success']),latencyMs=r['latency_ms'],error=r['error_message'],errorDetail=r['error_detail'] or '',createdAt=r['created_at']) for r in rows]})
+                    rows=execute(con, 'select * from call_logs order by id desc limit 80').fetchall(); return self.send_json(200, {'items':[dict(id=r['id'],clientName=r['client_name'],template=r['template'],provider=r['provider_name'],model=r['model_id'],success=bool(r['success']),latencyMs=r['latency_ms'],error=r['error_message'],errorDetail=r['error_detail'] or '',createdAt=r['created_at']) for r in rows]})
         return super().do_GET()
     def do_POST(self):
         try:
@@ -216,9 +336,9 @@ class Handler(SimpleHTTPRequestHandler):
                 proxy = (d.get('proxy') or '').strip()
                 try:
                     with db() as con:
-                        cur=con.execute('insert into providers(name,base_url,api_key_encrypted,proxy,enabled,created_at,updated_at) values(?,?,?,?,?,?,?)',(name,base_url,encrypt_secret(api_key),proxy,1 if d.get('enabled',True) else 0,t,t)); con.commit()
+                        cur=execute(con, 'insert into providers(name,base_url,api_key_encrypted,proxy,enabled,created_at,updated_at) values(?,?,?,?,?,?,?)',(name,base_url,encrypt_secret(api_key),proxy,1 if d.get('enabled',True) else 0,t,t)); con.commit()
                         return self.send_json(200, {'id':cur.lastrowid,'name':name,'baseUrl':base_url,'apiKeyMasked':'********','proxy':proxy,'enabled':d.get('enabled',True),'createdAt':t,'updatedAt':t})
-                except sqlite3.IntegrityError:
+                except DB_INTEGRITY_ERROR:
                     return self.send_json(409, {'error':f'Provider "{name}" 已存在'})
             if self.path=='/api/admin/models':
                 if not require_admin(self): return
@@ -228,10 +348,10 @@ class Handler(SimpleHTTPRequestHandler):
                 if not d.get('providerId'): return self.send_json(400, {'error':'请选择 Provider'})
                 try:
                     with db() as con:
-                        if d.get('isDefault'): con.execute('update models set is_default=0')
-                        cur=con.execute('insert into models(provider_id,model_id,display_name,purpose,temperature,max_tokens,is_default,enabled,created_at,updated_at) values(?,?,?,?,?,?,?,?,?,?)',(d['providerId'],model_id,d.get('displayName','').strip(),d.get('purpose','learning_plan'),float(d.get('temperature',0.3)),int(d.get('maxTokens',4096)),1 if d.get('isDefault') else 0,1 if d.get('enabled',True) else 0,t,t)); con.commit()
+                        if d.get('isDefault'): execute(con, 'update models set is_default=0')
+                        cur=execute(con, 'insert into models(provider_id,model_id,display_name,purpose,temperature,max_tokens,is_default,enabled,created_at,updated_at) values(?,?,?,?,?,?,?,?,?,?)',(d['providerId'],model_id,d.get('displayName','').strip(),d.get('purpose','learning_plan'),float(d.get('temperature',0.3)),int(d.get('maxTokens',4096)),1 if d.get('isDefault') else 0,1 if d.get('enabled',True) else 0,t,t)); con.commit()
                         return self.send_json(200, {'id':cur.lastrowid})
-                except sqlite3.IntegrityError:
+                except DB_INTEGRITY_ERROR:
                     return self.send_json(409, {'error':'该模型已存在'})
             if self.path=='/api/admin/test-model':
                 if not require_admin(self): return
@@ -249,13 +369,12 @@ class Handler(SimpleHTTPRequestHandler):
                 if not pid: return self.send_json(400, {'error':'providerId 必填'})
                 start=time.time()
                 with db() as con:
-                    row=con.execute('select * from providers where id=?',(pid,)).fetchone()
+                    row=execute(con, 'select * from providers where id=?',(pid,)).fetchone()
                     if not row: return self.send_json(404, {'error':'Provider 未找到'})
                     m=dict(row)
                     proxy = m.get('proxy') or os.getenv('HTTP_PROXY', '') or os.getenv('HTTPS_PROXY', '')
                     try:
-                        data, _ = fetch_url(m['base_url'].rstrip('/')+'/models', timeout=HTTP_TIMEOUT, proxy=proxy)
-                        payload=json.loads(data)
+                        payload=fetch_provider_json(m['base_url'], decrypt_secret(m['api_key_encrypted']), '/models', timeout=HTTP_TIMEOUT, proxy=proxy)
                         models_list = payload.get('data', []) if isinstance(payload.get('data'), list) else []
                         return self.send_json(200, {'ok':True,'provider':m['name'],'latencyMs':int((time.time()-start)*1000),'modelCount':len(models_list)})
                     except urllib.error.URLError as e:
@@ -267,13 +386,12 @@ class Handler(SimpleHTTPRequestHandler):
                 d=read_json(self); pid=d.get('providerId')
                 if not pid: return self.send_json(400, {'error':'providerId 必填'})
                 with db() as con:
-                    row=con.execute('select * from providers where id=?',(pid,)).fetchone()
+                    row=execute(con, 'select * from providers where id=?',(pid,)).fetchone()
                     if not row: return self.send_json(404, {'error':'Provider 未找到'})
                     m=dict(row)
                     proxy = m.get('proxy') or os.getenv('HTTP_PROXY', '') or os.getenv('HTTPS_PROXY', '')
                     try:
-                        data, _ = fetch_url(m['base_url'].rstrip('/')+'/models', timeout=HTTP_TIMEOUT, proxy=proxy)
-                        payload=json.loads(data)
+                        payload=fetch_provider_json(m['base_url'], decrypt_secret(m['api_key_encrypted']), '/models', timeout=HTTP_TIMEOUT, proxy=proxy)
                         models_list = payload.get('data', [])
                         if not isinstance(models_list, list):
                             return self.send_json(500, {'error':'API 返回格式异常，未找到模型列表'})
@@ -303,9 +421,9 @@ class Handler(SimpleHTTPRequestHandler):
                         if not mid: continue
                         dn = (mdl.get('displayName') or mid).strip()
                         try:
-                            cur=con.execute('insert into models(provider_id,model_id,display_name,purpose,temperature,max_tokens,is_default,enabled,created_at,updated_at) values(?,?,?,?,?,?,?,?,?,?)',(pid,mid,dn,'learning_plan',0.3,4096,0,1,t,t))
+                            cur=execute(con, 'insert into models(provider_id,model_id,display_name,purpose,temperature,max_tokens,is_default,enabled,created_at,updated_at) values(?,?,?,?,?,?,?,?,?,?)',(pid,mid,dn,'learning_plan',0.3,4096,0,1,t,t))
                             imported.append({'id':cur.lastrowid,'modelId':mid,'displayName':dn})
-                        except sqlite3.IntegrityError:
+                        except DB_INTEGRITY_ERROR:
                             pass
                     con.commit()
                 return self.send_json(200, {'ok':True,'imported':imported,'count':len(imported)})
@@ -317,11 +435,11 @@ class Handler(SimpleHTTPRequestHandler):
                     with db() as con: model=select_model(con)
                     proxy = model.get('proxy') or os.getenv('HTTP_PROXY', '') or os.getenv('HTTPS_PROXY', '')
                     ctx=collect_context(data['url'], proxy=proxy); plan=call_model(model,ctx,data, proxy=proxy)
-                    with db() as con: con.execute('insert into call_logs(client_name,template,provider_name,model_id,success,latency_ms,error_message,error_detail,created_at) values(?,?,?,?,?,?,?,?,?)',(data.get('clientName','learning-tracker'),data.get('template','learning_plan'),model['provider_name'],model['model_id'],1,int((time.time()-start)*1000),'','',now())); con.commit()
+                    with db() as con: execute(con, 'insert into call_logs(client_name,template,provider_name,model_id,success,latency_ms,error_message,error_detail,created_at) values(?,?,?,?,?,?,?,?,?)',(data.get('clientName','learning-tracker'),data.get('template','learning_plan'),model['provider_name'],model['model_id'],1,int((time.time()-start)*1000),'','',now())); con.commit()
                     return self.send_json(200, {'ok':True,'plan':plan,'provider':model['provider_name'],'model':model['model_id'],'fetched':{'kind':ctx.get('kind'),'title':ctx.get('title'),'headings':ctx.get('headings',[])[:10]}})
                 except Exception as e:
                     detail = f'{type(e).__name__}: {str(e)}'
-                    with db() as con: con.execute('insert into call_logs(client_name,template,provider_name,model_id,success,latency_ms,error_message,error_detail,created_at) values(?,?,?,?,?,?,?,?,?)',(data.get('clientName','learning-tracker'),data.get('template','learning_plan'),model['provider_name'] if model else '',model['model_id'] if model else '',0,int((time.time()-start)*1000),str(e),detail[:2000],now())); con.commit()
+                    with db() as con: execute(con, 'insert into call_logs(client_name,template,provider_name,model_id,success,latency_ms,error_message,error_detail,created_at) values(?,?,?,?,?,?,?,?,?)',(data.get('clientName','learning-tracker'),data.get('template','learning_plan'),model['provider_name'] if model else '',model['model_id'] if model else '',0,int((time.time()-start)*1000),str(e),detail[:2000],now())); con.commit()
                     return self.send_json(500, {'ok':False,'error':str(e)})
             return self.send_json(404, {'error':'not_found'})
         except urllib.error.HTTPError as e: return self.send_json(502, {'ok':False,'error':f'upstream HTTP {e.code}: {e.read().decode(errors="replace")[:500]}'})
@@ -338,19 +456,19 @@ class Handler(SimpleHTTPRequestHandler):
                 proxy=(d.get('proxy') or '').strip()
                 enabled=1 if d.get('enabled',True) else 0
                 with db() as con:
-                    row=con.execute('select * from providers where id=?',(pid,)).fetchone()
+                    row=execute(con, 'select * from providers where id=?',(pid,)).fetchone()
                     if not row: return self.send_json(404, {'error':'Provider 未找到'})
                     api_key_encrypted = row['api_key_encrypted']
                     if d.get('apiKey'):
                         api_key_encrypted = encrypt_secret(d['apiKey'].strip())
-                    con.execute('update providers set name=?,base_url=?,api_key_encrypted=?,proxy=?,enabled=?,updated_at=? where id=?',(name or row['name'],base_url or row['base_url'],api_key_encrypted,proxy,enabled,t,pid))
+                    execute(con, 'update providers set name=?,base_url=?,api_key_encrypted=?,proxy=?,enabled=?,updated_at=? where id=?',(name or row['name'],base_url or row['base_url'],api_key_encrypted,proxy,enabled,t,pid))
                     con.commit()
                     return self.send_json(200, {'ok':True,'id':pid,'name':name or row['name'],'baseUrl':base_url or row['base_url'],'apiKeyMasked':'********','proxy':proxy,'enabled':bool(enabled),'updatedAt':t})
             m2=re.match(r'/api/admin/models/(\d+)$',self.path)
             if m2:
                 mid=int(m2.group(1))
                 with db() as con:
-                    row=con.execute('select * from models where id=?',(mid,)).fetchone()
+                    row=execute(con, 'select * from models where id=?',(mid,)).fetchone()
                     if not row: return self.send_json(404, {'error':'Model 未找到'})
                     model_id=(d.get('modelId') or row['model_id']).strip()
                     display_name=(d.get('displayName') or row['display_name']).strip()
@@ -359,8 +477,8 @@ class Handler(SimpleHTTPRequestHandler):
                     max_tokens=int(d.get('maxTokens', row['max_tokens']))
                     is_default=1 if d.get('isDefault', row['is_default']) else 0
                     enabled=1 if d.get('enabled', row['enabled']) else 0
-                    if d.get('isDefault'): con.execute('update models set is_default=0')
-                    con.execute('update models set model_id=?,display_name=?,purpose=?,temperature=?,max_tokens=?,is_default=?,enabled=?,updated_at=? where id=?',(model_id,display_name,purpose,temperature,max_tokens,is_default,enabled,t,mid))
+                    if d.get('isDefault'): execute(con, 'update models set is_default=0')
+                    execute(con, 'update models set model_id=?,display_name=?,purpose=?,temperature=?,max_tokens=?,is_default=?,enabled=?,updated_at=? where id=?',(model_id,display_name,purpose,temperature,max_tokens,is_default,enabled,t,mid))
                     con.commit()
                     return self.send_json(200, {'ok':True,'id':mid})
             return self.send_json(404, {'error':'not_found'})
@@ -369,9 +487,9 @@ class Handler(SimpleHTTPRequestHandler):
         if not require_admin(self): return
         with db() as con:
             m=re.match(r'/api/admin/providers/(\d+)$',self.path)
-            if m: con.execute('delete from providers where id=?',(m.group(1),)); con.commit(); return self.send_json(200, {'ok':True})
+            if m: execute(con, 'delete from providers where id=?',(m.group(1),)); con.commit(); return self.send_json(200, {'ok':True})
             m=re.match(r'/api/admin/models/(\d+)$',self.path)
-            if m: con.execute('delete from models where id=?',(m.group(1),)); con.commit(); return self.send_json(200, {'ok':True})
+            if m: execute(con, 'delete from models where id=?',(m.group(1),)); con.commit(); return self.send_json(200, {'ok':True})
         return self.send_json(404, {'error':'not_found'})
 
 
