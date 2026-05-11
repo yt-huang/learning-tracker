@@ -1,5 +1,5 @@
 FROM python:3.12-alpine
-RUN pip install pymysql
+RUN apk add --no-cache build-base libffi-dev openssl-dev && pip install pymysql cryptography && apk del build-base libffi-dev openssl-dev
 WORKDIR /app
 COPY . /app
 EXPOSE 8010

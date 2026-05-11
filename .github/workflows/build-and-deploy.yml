@@ -43,7 +43,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq mysql-client
-          pip install pymysql pytest
+          pip install pymysql cryptography pytest
       - name: Wait for MySQL
         run: |
           for i in $(seq 1 30); do
