@@ -50,23 +50,6 @@ jobs:
             mysqladmin ping -h 127.0.0.1 -u root -ptest_root_pass --silent && break
             sleep 2
           done
-      - name: Seed admin user
-        run: |
-          python3 - <<'PY'
-          import hashlib, uuid
-          salt = uuid.uuid4().hex[:16]
-          pw = "K8sMysql2024!"
-          h = hashlib.sha256((salt + pw).encode()).hexdigest()
-          print(f"Salt: {salt}")
-          print(f"Hash: {salt}:{h}")
-          import pymysql
-          conn = pymysql.connect(host="127.0.0.1", port=3306, user="root", password="test_root_pass", database="learning_tracker", charset="utf8mb4", autocommit=True)
-          cur = conn.cursor()
-          cur.execute("INSERT INTO users (id, username, password_hash, email, role, active, created_at, updated_at) VALUES (%s,%s,%s,%s,%s,%s,NOW(),NOW()) ON DUPLICATE KEY UPDATE password_hash=VALUES(password_hash), active=1",
-              ("testadmin1", "admin@cpaas.io", f"{salt}:{h}", "admin@test.com", "admin", 1))
-          conn.close()
-          print("Admin user seeded")
-          PY
       - name: Run API tests
         env:
           MYSQL_HOST: 127.0.0.1

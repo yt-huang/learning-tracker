@@ -51,11 +51,19 @@ class TestAuth(unittest.TestCase):
         else:
             raise RuntimeError(f"Server not reachable at {BASE}")
         # Ensure admin user exists
-        api("POST", "/api/auth/register", {
+        reg_resp = api("POST", "/api/auth/register", {
             "username": ADMIN_USER,
             "password": ADMIN_PASS,
             "email": "admin@test.com",
         })
+        # If register failed (409 = user exists), try logging in; if login also fails, log details
+        if not reg_resp.get("ok"):
+            print(f"[DEBUG] Register returned: {reg_resp}", file=sys.stderr)
+            login_check = api("POST", "/api/auth/login", {"username": ADMIN_USER, "password": ADMIN_PASS})
+            print(f"[DEBUG] Login returned: {login_check}", file=sys.stderr)
+            if not login_check.get("ok"):
+                # Maybe user exists with different password — list users via direct check
+                pass
 
     def test_register_duplicate_rejected(self):
         """Registering an existing user should fail."""
