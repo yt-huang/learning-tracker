@@ -1,0 +1,162 @@
+name: setup-singbox-proxy
+
+on:
+  workflow_dispatch:
+
+jobs:
+  setup-proxy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Install sing-box on VM
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          command_timeout: 5m
+          script: |
+            set -euo pipefail
+            echo "=== Downloading sing-box ==="
+            sudo mkdir -p /opt/sing-box /etc/sing-box
+
+            SINGBOX_VER="1.12.7"
+            ARCH=$(uname -m)
+            [ "$ARCH" = "x86_64" ] && ARCH="amd64"
+            [ "$ARCH" = "aarch64" ] && ARCH="arm64"
+
+            # Try mirrors (China-friendly first)
+            for url in \
+              "https://ghp.ci/https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VER}/sing-box-${SINGBOX_VER}-linux-${ARCH}.tar.gz" \
+              "https://ghfast.top/https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VER}/sing-box-${SINGBOX_VER}-linux-${ARCH}.tar.gz" \
+              "https://gh.con.sh/https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VER}/sing-box-${SINGBOX_VER}-linux-${ARCH}.tar.gz" \
+              "https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VER}/sing-box-${SINGBOX_VER}-linux-${ARCH}.tar.gz" \
+            ; do
+              echo "Trying: $url"
+              if curl -fsSL --connect-timeout 15 --max-time 120 "$url" -o /tmp/sing-box.tar.gz 2>/dev/null; then
+                echo "OK from $url"
+                break
+              fi
+              echo "Failed"
+            done
+
+            if [ ! -f /tmp/sing-box.tar.gz ] || [ ! -s /tmp/sing-box.tar.gz ]; then
+              echo "FATAL: Cannot download sing-box"
+              exit 1
+            fi
+
+            cd /tmp && tar xzf sing-box.tar.gz
+            sudo mv sing-box-*/sing-box /opt/sing-box/sing-box 2>/dev/null || sudo mv sing-box /opt/sing-box/sing-box
+            sudo chmod +x /opt/sing-box/sing-box
+            echo "Installed:"
+            /opt/sing-box/sing-box version 2>&1 || true
+
+      - name: Configure and start sing-box
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          command_timeout: 5m
+          script: |
+            set -euo pipefail
+            echo "=== sing-box config ==="
+            sudo tee /etc/sing-box/config.json <<'JSON'
+            {
+              "log": {"level": "warn", "output": "/var/log/sing-box.log"},
+              "inbounds": [{
+                "type": "mixed",
+                "tag": "mixed-in",
+                "listen": "127.0.0.1",
+                "listen_port": 10808,
+                "sniff": true
+              }],
+              "outbounds": [
+                {
+                  "type": "vless",
+                  "tag": "proxy",
+                  "server": "108.165.23.47",
+                  "server_port": 47581,
+                  "uuid": "6dc45d53-7621-4783-9216-a23df0b6415d",
+                  "flow": "xtls-rprx-vision",
+                  "tls": {
+                    "enabled": true,
+                    "server_name": "www.iij.ad.jp",
+                    "utls": {"enabled": true, "fingerprint": "firefox"},
+                    "reality": {
+                      "enabled": true,
+                      "public_key": "byweGpUTUXliICQc4RkABvOkA8mupZ1xBdlQSqvJ6X4",
+                      "short_id": ""
+                    }
+                  }
+                },
+                {"type": "direct", "tag": "direct"}
+              ],
+              "route": {
+                "rules": [
+                  {"domain_suffix": [".cn", ".com.cn"], "outbound": "direct"},
+                  {"ip_cidr": ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8"], "outbound": "direct"}
+                ],
+                "auto_detect_interface": true
+              }
+            }
+            JSON
+
+            sudo tee /etc/systemd/system/sing-box.service <<'UNIT'
+            [Unit]
+            Description=sing-box proxy
+            After=network.target
+            [Service]
+            Type=simple
+            ExecStart=/opt/sing-box/sing-box run -c /etc/sing-box/config.json
+            Restart=always
+            RestartSec=5
+            [Install]
+            WantedBy=multi-user.target
+            UNIT
+
+            sudo systemctl daemon-reload
+            sudo systemctl enable sing-box
+            sudo systemctl restart sing-box
+            sleep 3
+            echo "=== sing-box status ==="
+            sudo systemctl status sing-box --no-pager | head -10 || true
+            echo "=== Proxy test ==="
+            curl -s --max-time 15 -x http://127.0.0.1:10808 https://httpbin.org/ip 2>&1 || echo "Proxy not ready yet"
+            echo "=== GitHub via proxy ==="
+            curl -s --max-time 15 -x http://127.0.0.1:10808 https://github.com -o /dev/null -w "HTTP %{http_code} in %{time_total}s\n" 2>&1 || echo "GitHub test: failed"
+
+      - name: Configure Docker proxy
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          command_timeout: 5m
+          script: |
+            set -euo pipefail
+            echo "=== Docker proxy config ==="
+            sudo mkdir -p /etc/systemd/system/docker.service.d
+            sudo tee /etc/systemd/system/docker.service.d/http-proxy.conf <<'EOF'
+            [Service]
+            Environment="HTTP_PROXY=http://127.0.0.1:10808"
+            Environment="HTTPS_PROXY=http://127.0.0.1:10808"
+            Environment="NO_PROXY=localhost,127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,.cn,.com.cn,.org.cn,host.docker.internal"
+            EOF
+
+            echo "=== Restarting Docker ==="
+            sudo systemctl daemon-reload
+            sudo systemctl restart docker
+            sleep 5
+
+            echo "=== Docker proxy config ==="
+            sudo systemctl show docker --property=Environment 2>&1 || true
+
+            echo "=== Test pull alpine via proxy ==="
+            time sudo docker pull alpine:latest 2>&1 || echo "Pull may need more time"
+
+            echo "=== Restart mysql-lt ==="
+            sudo docker start mysql-lt 2>/dev/null || echo "mysql-lt not found, will be created by deploy"
+
+            echo "=== Container status ==="
+            sudo docker ps -a --format 'table {{.Names}}\t{{.Status}}'
