@@ -16,6 +16,15 @@ function minutes(m) { const h = Math.floor((m || 0) / 60); const min = (m || 0) 
 function statusText(s) { return ({not_started:'未开始', in_progress:'进行中', paused:'暂停', completed:'已完成', todo:'待办', doing:'进行中', done:'已完成'})[s] || s; }
 function pctClass(v) { const n = Number(v || 0); return n >= 70 ? 'pct-high' : n >= 30 ? 'pct-mid' : 'pct-low'; }
 function progBarClass(v) { const n = Number(v || 0); return n >= 70 ? 'progress-high' : n >= 30 ? 'progress-mid' : 'progress-low'; }
+async function apiJson(path, opts = {}) {
+  const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
+  const token = Auth.getToken();
+  if (token) headers.Authorization = 'Bearer ' + token;
+  const res = await fetch(path, { ...opts, headers });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.ok === false) throw new Error(data.error || data.detail || res.statusText);
+  return data;
+}
 
 async function boot() {
   bindAuth();
@@ -89,7 +98,7 @@ function showLogin() { $('#app').classList.add('hidden'); $('#login-screen').cla
 
 function bindApp() {
   $$('.nav-btn').forEach(btn => btn.onclick = () => switchView(btn.dataset.view));
-  $('#new-plan-btn').onclick = () => $('#plan-dialog').showModal();
+  $('#new-plan-btn').onclick = async () => { await loadAiModelOptions(); $('#plan-dialog').showModal(); };
   $('#cancel-plan').onclick = () => $('#plan-dialog').close();
   $('#cancel-log').onclick = () => $('#log-dialog').close();
   $('#source-url').addEventListener('input', () => { if (!$('#plan-title').value) $('#plan-title').placeholder = inferTitleFromUrl($('#source-url').value); });
@@ -156,6 +165,27 @@ function resetPlanDialog(form) {
   $('#ai-analyze-plan').disabled = false; $('#ai-analyze-plan').textContent = 'AI 深度分析'; $('#plan-dialog').close();
 }
 
+async function loadAiModelOptions() {
+  const sel = $('#ai-model-select');
+  if (!sel) return;
+  const old = sel.value;
+  sel.innerHTML = '<option value="">默认模型（管理员配置）</option>';
+  try {
+    const data = await apiJson('/api/ai/models');
+    (data.items || []).forEach(m => {
+      const opt = document.createElement('option');
+      opt.value = String(m.id);
+      opt.textContent = `${m.label || (m.providerName + ' / ' + m.modelId)}${m.isDefault ? ' ⭐默认' : ''}`;
+      sel.appendChild(opt);
+    });
+    if ([...sel.options].some(o => o.value === old)) sel.value = old;
+  } catch (e) {
+    const opt = document.createElement('option');
+    opt.value = ''; opt.textContent = '模型列表不可用，将使用本地 fallback';
+    sel.appendChild(opt);
+  }
+}
+
 async function analyzeLinkWithAI() {
   const url = $('#source-url').value.trim();
   if (!url) return toast('请先输入学习链接');
@@ -167,8 +197,8 @@ async function analyzeLinkWithAI() {
   try {
     showLoading('AI 分析中...');
     const res = await fetch('/api/analyze-link', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url, goal: $('#plan-goal').value, level: $('#plan-difficulty').value, hoursPerWeek: Math.max(1, Math.round(Number($('#plan-hours').value || 12) / 3)) }),
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + Auth.getToken() },
+      body: JSON.stringify({ url, goal: $('#plan-goal').value, level: $('#plan-difficulty').value, hoursPerWeek: Math.max(1, Math.round(Number($('#plan-hours').value || 12) / 3)), modelId: $('#ai-model-select')?.value || '' }),
     });
     const data = await res.json();
     if (!res.ok || !data.ok) throw new Error(data.error || 'AI 分析失败');
@@ -203,6 +233,7 @@ async function render() {
   if (currentView === 'detail') return await renderPlanDetail();
   if (currentView === 'logs') return await renderLogs();
   if (currentView === 'users') return renderUsers();
+  if (currentView === 'ai-config') return renderAIConfig();
   if (currentView === 'data') return renderData();
 }
 
@@ -431,6 +462,68 @@ function renderUsers() {
     $('#users-view').innerHTML = `<section class="panel"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><h3>用户列表（${users.length}）</h3></div><div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:14px"><thead><tr style="border-bottom:1px solid var(--line)"><th style="text-align:left;padding:8px;color:var(--muted)">用户名</th><th style="text-align:left;padding:8px;color:var(--muted)">邮箱</th><th style="text-align:left;padding:8px;color:var(--muted)">角色</th><th style="text-align:center;padding:8px;color:var(--muted)">状态</th><th style="text-align:left;padding:8px;color:var(--muted)">注册时间</th><th style="text-align:right;padding:8px;color:var(--muted)">操作</th></tr></thead><tbody>${users.map(userRow).join('')}</tbody></table></div></section>`;
     bindUserActions();
   }).catch(() => { hideLoading(); $('#users-view').innerHTML = '<div class="panel"><p class="muted">加载失败</p></div>'; });
+}
+
+async function renderAIConfig() {
+  showOnly('#ai-config-view'); $('#view-title').textContent = 'AI 模型配置'; $('#view-subtitle').textContent = '仅管理员可见 · Provider/API Key 不暴露给普通用户';
+  if (!Auth.isAdmin()) { $('#ai-config-view').innerHTML = '<div class="panel"><p class="muted">仅管理员可访问</p></div>'; return; }
+  showLoading('加载 AI 配置...');
+  try {
+    const [providers, models, presets] = await Promise.all([
+      apiJson('/api/admin/ai/providers'),
+      apiJson('/api/admin/ai/models'),
+      apiJson('/api/admin/ai/provider-presets', { method: 'POST', body: '{}' }).catch(() => ({items: []})),
+    ]);
+    hideLoading();
+    $('#ai-config-view').innerHTML = `
+      <div class="grid-2 layout-gap">
+        <section class="panel"><h3>Provider 配置</h3><p class="muted">DeepSeek: https://api.deepseek.com；Kimi/Moonshot: https://api.moonshot.cn/v1。API Key 只保存到 AI Hub/MySQL，页面只显示掩码。</p>
+          <div class="toolbar"><select id="ai-preset"><option value="">选择预设填充</option>${(presets.items||[]).map(p=>`<option value="${p.baseUrl}" data-name="${p.name}">${p.name} — ${p.baseUrl}</option>`).join('')}</select></div>
+          <label>名称<input id="ai-provider-name" placeholder="DeepSeek / Kimi" /></label>
+          <label>API Base URL<input id="ai-provider-base" placeholder="https://api.deepseek.com" /></label>
+          <label>API Key<input id="ai-provider-key" type="password" placeholder="仅新增或需要替换时填写" /></label>
+          <label>代理（可选）<input id="ai-provider-proxy" placeholder="http://host.docker.internal:7890" /></label>
+          <label><input id="ai-provider-enabled" type="checkbox" checked /> 启用</label>
+          <button class="primary" id="ai-provider-save">保存 Provider</button>
+          <div style="margin-top:16px">${(providers.items||[]).map(p=>`<div class="log-item"><b>${p.name}</b><span>${p.baseUrl}</span><small>Key: ${p.apiKeyMasked || '-'} · ${p.enabled?'启用':'停用'} <button class="ghost-sm" data-ai-test-provider="${p.id}">测试</button> <button class="ghost-sm danger" data-ai-del-provider="${p.id}">删除</button></small></div>`).join('') || '<p class="muted">暂无 Provider</p>'}</div>
+        </section>
+        <section class="panel"><h3>模型配置</h3><p class="muted">普通用户分析时只能选择这里启用的模型，不能看到 API URL / API Key。</p>
+          <label>Provider<select id="ai-model-provider">${(providers.items||[]).map(p=>`<option value="${p.id}">${p.name}</option>`).join('')}</select></label>
+          <div class="toolbar"><button class="ghost" id="ai-fetch-models">从 Provider 拉取模型</button><select id="ai-fetched-models"><option value="">手动输入或先拉取</option></select></div>
+          <label>模型 ID<input id="ai-model-id" placeholder="deepseek-chat / kimi-k2-0905-preview" /></label>
+          <label>显示名称<input id="ai-model-name" placeholder="DeepSeek Chat / Kimi K2" /></label>
+          <label><input id="ai-model-default" type="checkbox" /> 设为默认</label>
+          <button class="primary" id="ai-model-save">保存模型</button>
+          <div style="margin-top:16px">${(models.items||[]).map(m=>`<div class="log-item"><b>${m.displayName || m.modelId}${m.isDefault?' ⭐默认':''}</b><span>${m.providerName} / ${m.modelId}</span><small>${m.enabled?'启用':'停用'} <button class="ghost-sm danger" data-ai-del-model="${m.id}">删除</button></small></div>`).join('') || '<p class="muted">暂无模型</p>'}</div>
+        </section>
+      </div>`;
+    bindAIConfigActions();
+  } catch (e) {
+    hideLoading(); $('#ai-config-view').innerHTML = `<div class="panel"><p class="muted">${e.message}</p></div>`;
+  }
+}
+
+function bindAIConfigActions() {
+  $('#ai-preset')?.addEventListener('change', e => {
+    const opt = e.target.selectedOptions[0]; if (!opt?.value) return;
+    $('#ai-provider-base').value = opt.value; $('#ai-provider-name').value = opt.dataset.name || '';
+  });
+  $('#ai-provider-save')?.addEventListener('click', async () => {
+    try { await apiJson('/api/admin/ai/providers', {method:'POST', body: JSON.stringify({name:$('#ai-provider-name').value, baseUrl:$('#ai-provider-base').value, apiKey:$('#ai-provider-key').value, proxy:$('#ai-provider-proxy').value, enabled:$('#ai-provider-enabled').checked})}); toast('Provider 已保存'); await renderAIConfig(); }
+    catch(e){ toast(e.message); }
+  });
+  $('#ai-fetch-models')?.addEventListener('click', async () => {
+    try { const d = await apiJson('/api/admin/ai/fetch-models', {method:'POST', body: JSON.stringify({providerId:Number($('#ai-model-provider').value)})}); const sel=$('#ai-fetched-models'); sel.innerHTML='<option value="">选择拉取到的模型</option>'+(d.models||[]).map(m=>`<option value="${m.modelId}">${m.displayName || m.modelId}</option>`).join(''); toast(`拉取到 ${(d.models||[]).length} 个模型`); }
+    catch(e){ toast(e.message); }
+  });
+  $('#ai-fetched-models')?.addEventListener('change', e => { if(e.target.value){ $('#ai-model-id').value=e.target.value; $('#ai-model-name').value=e.target.selectedOptions[0].textContent; }});
+  $('#ai-model-save')?.addEventListener('click', async () => {
+    try { await apiJson('/api/admin/ai/models', {method:'POST', body: JSON.stringify({providerId:Number($('#ai-model-provider').value), modelId:$('#ai-model-id').value, displayName:$('#ai-model-name').value, purpose:'learning_plan', isDefault:$('#ai-model-default').checked, enabled:true})}); toast('模型已保存'); await renderAIConfig(); }
+    catch(e){ toast(e.message); }
+  });
+  $$('[data-ai-test-provider]').forEach(b => b.onclick = async () => { try { const d=await apiJson('/api/admin/ai/test-connection',{method:'POST',body:JSON.stringify({providerId:Number(b.dataset.aiTestProvider)})}); toast(d.ok ? `连接成功：${d.modelCount || 0} 个模型` : (d.error || '连接失败')); } catch(e){ toast(e.message); } });
+  $$('[data-ai-del-provider]').forEach(b => b.onclick = async () => { if(!confirm('删除 Provider 及其模型？')) return; await apiJson(`/api/admin/ai/providers/${b.dataset.aiDelProvider}`, {method:'DELETE'}); toast('已删除'); await renderAIConfig(); });
+  $$('[data-ai-del-model]').forEach(b => b.onclick = async () => { if(!confirm('删除模型？')) return; await apiJson(`/api/admin/ai/models/${b.dataset.aiDelModel}`, {method:'DELETE'}); toast('已删除'); await renderAIConfig(); });
 }
 
 function userRow(u) {

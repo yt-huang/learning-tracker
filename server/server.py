@@ -414,18 +414,38 @@ def extract_json(text: str) -> dict:
         raise
 
 
-def call_ai_hub(url: str, goal: str, level: str, hours_per_week: int) -> dict | None:
+def ai_hub_request(path: str, method: str = "GET", body: dict | None = None, admin: bool = False, timeout: int = 120) -> dict:
     hub_url = os.getenv("AI_HUB_URL", "").strip().rstrip("/")
-    hub_token = os.getenv("AI_HUB_TOKEN", "").strip()
-    if not hub_url or not hub_token:
-        return None
+    token = os.getenv("AI_HUB_ADMIN_TOKEN" if admin else "AI_HUB_TOKEN", "").strip()
+    if not hub_url or not token:
+        raise RuntimeError("AI Hub 未配置")
+    data = None if body is None else json.dumps(body).encode("utf-8")
+    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {token}"}
+    req = urllib.request.Request(hub_url + path, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", errors="replace")[:1000]
+        try:
+            payload = json.loads(detail)
+            raise RuntimeError(payload.get("error") or payload.get("detail") or detail)
+        except json.JSONDecodeError:
+            raise RuntimeError(f"AI Hub HTTP {e.code}: {detail}")
+
+
+def call_ai_hub(url: str, goal: str, level: str, hours_per_week: int, model_id: str | None = None) -> dict | None:
     body = {"clientName": "learning-tracker", "template": "learning_plan", "url": url, "goal": goal, "level": level, "hoursPerWeek": hours_per_week}
-    req = urllib.request.Request(hub_url + "/api/v1/analyze-learning-link", data=json.dumps(body).encode("utf-8"), headers={"Content-Type": "application/json", "Authorization": f"Bearer {hub_token}"}, method="POST")
-    with urllib.request.urlopen(req, timeout=120) as resp:
-        payload = json.loads(resp.read().decode("utf-8"))
+    if model_id:
+        body["modelId"] = model_id
+    payload = ai_hub_request("/api/v1/analyze-learning-link", method="POST", body=body, timeout=120)
     plan = payload.get("plan")
     if isinstance(plan, dict):
-        plan.setdefault("analysisSummary", f"由 AI Hub 生成")
+        provider = payload.get("provider") or "AI Hub"
+        model = payload.get("model") or ""
+        plan.setdefault("analysisSummary", f"由 {provider}/{model} 生成" if model else "由 AI Hub 生成")
+        plan["selectedProvider"] = provider
+        plan["selectedModel"] = model
         return plan
     return None
 
@@ -1059,8 +1079,69 @@ class Handler(SimpleHTTPRequestHandler):
         conn.close()
         return self.send_json(200, {"ok": True, "stats": {"total": ps["total"], "completed": ps["completed"], "avg_progress": float(ps["avg_progress"] or 0), "total_minutes": lm["total_minutes"]}})
 
+    # ---- AI Hub proxy ----
+    def handle_ai_models(self):
+        user = require_auth(self.headers)
+        if not user:
+            return self.send_json(401, {"ok": False, "error": "未登录"})
+        try:
+            return self.send_json(200, ai_hub_request("/api/v1/models", timeout=30))
+        except Exception as e:
+            return self.send_json(502, {"ok": False, "error": f"AI Hub 模型列表不可用：{e}"})
+
+    def require_admin_user(self):
+        user = require_auth(self.headers)
+        if not user:
+            self.send_json(401, {"ok": False, "error": "未登录"})
+            return None
+        if user["role"] != "admin":
+            self.send_json(403, {"ok": False, "error": "仅管理员可操作模型配置"})
+            return None
+        return user
+
+    def proxy_ai_hub_admin(self, path: str, method: str = "GET", body: dict | None = None, timeout: int = 60):
+        if not self.require_admin_user():
+            return
+        try:
+            return self.send_json(200, ai_hub_request(path, method=method, body=body, admin=True, timeout=timeout))
+        except Exception as e:
+            return self.send_json(502, {"ok": False, "error": f"AI Hub 管理接口不可用：{e}"})
+
+    def handle_admin_ai_get(self, parts):
+        if len(parts) == 4 and parts[3] == "providers":
+            return self.proxy_ai_hub_admin("/api/admin/providers")
+        if len(parts) == 4 and parts[3] == "models":
+            return self.proxy_ai_hub_admin("/api/admin/models")
+        if len(parts) == 4 and parts[3] == "logs":
+            return self.proxy_ai_hub_admin("/api/admin/logs")
+        return self.send_json(404, {"error": "not_found"})
+
+    def handle_admin_ai_post(self, parts):
+        body = self.read_body()
+        if len(parts) == 4 and parts[3] == "providers":
+            return self.proxy_ai_hub_admin("/api/admin/providers", method="POST", body=body)
+        if len(parts) == 4 and parts[3] == "models":
+            return self.proxy_ai_hub_admin("/api/admin/models", method="POST", body=body)
+        if len(parts) == 4 and parts[3] in {"test-model", "test-connection", "fetch-models", "batch-import-models", "provider-presets"}:
+            return self.proxy_ai_hub_admin(f"/api/admin/{parts[3]}", method="POST", body=body)
+        return self.send_json(404, {"error": "not_found"})
+
+    def handle_admin_ai_put(self, parts):
+        body = self.read_body()
+        if len(parts) == 5 and parts[3] in {"providers", "models"}:
+            return self.proxy_ai_hub_admin(f"/api/admin/{parts[3]}/{parts[4]}", method="PUT", body=body)
+        return self.send_json(404, {"error": "not_found"})
+
+    def handle_admin_ai_delete(self, parts):
+        if len(parts) == 5 and parts[3] in {"providers", "models"}:
+            return self.proxy_ai_hub_admin(f"/api/admin/{parts[3]}/{parts[4]}", method="DELETE")
+        return self.send_json(404, {"error": "not_found"})
+
     # ---- AI Analyze ----
     def handle_analyze_link(self):
+        user = require_auth(self.headers)
+        if not user:
+            return self.send_json(401, {"ok": False, "error": "未登录"})
         try:
             body = self.read_body()
             url = str(body.get("url", "")).strip()
@@ -1069,16 +1150,19 @@ class Handler(SimpleHTTPRequestHandler):
             goal = str(body.get("goal", "")).strip()
             level = str(body.get("level", "进阶")).strip()
             hours = int(body.get("hoursPerWeek", 5))
+            model_id = str(body.get("modelId") or "").strip()
 
             # Strategy 1: Try AI Hub (internal LLM service)
             try:
-                hub_plan = call_ai_hub(url, goal, level, hours)
+                hub_plan = call_ai_hub(url, goal, level, hours, model_id or None)
                 if hub_plan:
                     plan = normalize_plan(hub_plan, url)
                     plan["aiStrategy"] = "ai-hub"
                     return self.send_json(200, {"ok": True, "plan": plan, "fetched": {"kind": "ai-hub", "title": plan.get("title", "")}})
             except Exception as e:
                 print(f"[AI-Hub] Error: {e}", file=sys.stderr, flush=True)
+                if model_id:
+                    return self.send_json(502, {"ok": False, "error": f"所选模型分析失败：{e}"})
 
             # Strategy 2: Collect link context and try direct AI call
             try:
@@ -1121,6 +1205,10 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.handle_auth_me()
             if base == "/api/admin/users":
                 return self.handle_admin_list_users()
+            if base == "/api/ai/models":
+                return self.handle_ai_models()
+            if len(parts) >= 4 and "/".join(parts[:3]) == "api/admin/ai":
+                return self.handle_admin_ai_get(parts)
             if base == "/api/stats":
                 return self.handle_stats()
             if base == "/api/plans" and len(parts) == 2:
@@ -1148,6 +1236,8 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.handle_auth_logout()
             if base == "/api/analyze-link":
                 return self.handle_analyze_link()
+            if len(parts) >= 4 and "/".join(parts[:3]) == "api/admin/ai":
+                return self.handle_admin_ai_post(parts)
             if base == "/api/plans" and len(parts) == 2:
                 return self.handle_create_plan()
             if len(parts) >= 4 and parts[0] == "api" and parts[1] == "plans":
@@ -1177,6 +1267,8 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             if "/".join(parts[:3]) == "api/admin/users":
                 return self.handle_admin_update_user(parts[3])
+            if len(parts) >= 5 and "/".join(parts[:3]) == "api/admin/ai":
+                return self.handle_admin_ai_put(parts)
             if len(parts) >= 4 and parts[0] == "api" and parts[1] == "plans":
                 if parts[3] == "tasks":
                     return self.handle_update_task(parts[4])
@@ -1191,6 +1283,8 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             if "/".join(parts[:3]) == "api/admin/users":
                 return self.handle_admin_delete_user(parts[3])
+            if len(parts) >= 5 and "/".join(parts[:3]) == "api/admin/ai":
+                return self.handle_admin_ai_delete(parts)
             if len(parts) >= 3 and parts[0] == "api" and parts[1] == "plans":
                 pid = parts[2]
                 if len(parts) == 3:

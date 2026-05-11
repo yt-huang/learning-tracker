@@ -282,16 +282,33 @@ def extract_json(text):
     try: return json.loads(text)
     except json.JSONDecodeError: return json.loads(text[text.find('{'):text.rfind('}')+1])
 
-def select_model(con):
-    q='''SELECT m.*, p.name provider_name, p.base_url, p.api_key_encrypted, p.proxy FROM models m JOIN providers p ON p.id=m.provider_id WHERE m.enabled=1 AND p.enabled=1 ORDER BY m.is_default DESC, m.id DESC LIMIT 1'''
-    row=execute(con, q).fetchone()
-    if not row: raise RuntimeError('请先在 AI Hub 后台配置并启用 Provider 和 Model')
+def model_row_to_public(r):
+    label = r['display_name'] or r['model_id']
+    return dict(id=r['id'], providerId=r['provider_id'], providerName=r['provider_name'], modelId=r['model_id'], displayName=r['display_name'], label=f"{r['provider_name']} / {label}", purpose=r['purpose'], isDefault=bool(r['is_default']))
+
+def list_public_models(con):
+    q='''SELECT m.*, p.name provider_name FROM models m JOIN providers p ON p.id=m.provider_id WHERE m.enabled=1 AND p.enabled=1 ORDER BY m.is_default DESC,p.name ASC,m.display_name ASC,m.model_id ASC'''
+    return [model_row_to_public(r) for r in execute(con, q).fetchall()]
+
+def select_model(con, model_ref=None):
+    q='''SELECT m.*, p.name provider_name, p.base_url, p.api_key_encrypted, p.proxy FROM models m JOIN providers p ON p.id=m.provider_id WHERE m.enabled=1 AND p.enabled=1'''
+    params=[]
+    if model_ref:
+        q += ' AND (m.id=? OR m.model_id=?)'
+        params=[str(model_ref), str(model_ref)]
+    q += ' ORDER BY m.is_default DESC, m.id DESC LIMIT 1'
+    row=execute(con, q, params).fetchone()
+    if not row and model_ref: raise RuntimeError('选择的模型不存在或未启用，请刷新模型列表后重试')
+    if not row: raise RuntimeError('请先由管理员配置并启用 Provider 和 Model')
     return dict(row)
 
 def call_model(m, ctx, data, proxy=''):
     key=decrypt_secret(m['api_key_encrypted'])
     prompt=f'''你是学习规划专家和产品经理。根据链接内容生成适合 Learning Tracker 的学习计划。\n只输出 JSON，不要 Markdown。字段：title, sourceUrl, description, category, difficulty, estimatedHours, analysisSummary, milestones。\nmilestones 每项字段：title, description, goal, tasks。tasks 每项字段：title, description, estimatedMinutes, acceptance。\n要求：4-6 个阶段，每阶段 3-5 个具体可执行任务，可学习日志。\n用户目标：{data.get('goal') or '未填写'}\n用户水平：{data.get('level') or '进阶'}\n每周可投入小时：{data.get('hoursPerWeek') or 5}\n链接上下文：{json.dumps(ctx, ensure_ascii=False)[:MAX_CONTENT_CHARS]}'''
-    body={'model':m['model_id'],'messages':[{'role':'system','content':'You output strict JSON only.'},{'role':'user','content':prompt}], 'temperature':float(m['temperature'] or 0.3),'response_format':{'type':'json_object'}}
+    body={'model':m['model_id'],'messages':[{'role':'system','content':'You output strict JSON only.'},{'role':'user','content':prompt}], 'temperature':float(m['temperature'] or 0.3)}
+    provider_hint = f"{m.get('provider_name','')} {m.get('base_url','')}".lower()
+    if not any(x in provider_hint for x in ('deepseek', 'api.deepseek.com')):
+        body['response_format']={'type':'json_object'}
     opener = build_opener(proxy)
     req=urllib.request.Request(m['base_url'].rstrip('/')+'/chat/completions',data=json.dumps(body).encode(),headers={'Content-Type':'application/json','Authorization':f'Bearer {key}'},method='POST')
     with opener.open(req,timeout=HTTP_TIMEOUT) as resp: payload=json.loads(resp.read().decode())
@@ -309,6 +326,9 @@ class Handler(SimpleHTTPRequestHandler):
             return super().do_GET()
         if self.path=='/health':
             with db() as con: return self.send_json(200, {'ok':True,'dbEngine':'mysql' if USE_MYSQL else 'sqlite','providers':scalar(con, 'select count(*) from providers'),'models':scalar(con, 'select count(*) from models')})
+        if self.path=='/api/v1/models':
+            if not require_internal(self): return
+            with db() as con: return self.send_json(200, {'ok':True,'items':list_public_models(con)})
         if self.path.startswith('/api/admin/'):
             if not require_admin(self): return
             with db() as con:
@@ -340,6 +360,14 @@ class Handler(SimpleHTTPRequestHandler):
                         return self.send_json(200, {'id':cur.lastrowid,'name':name,'baseUrl':base_url,'apiKeyMasked':'********','proxy':proxy,'enabled':d.get('enabled',True),'createdAt':t,'updatedAt':t})
                 except DB_INTEGRITY_ERROR:
                     return self.send_json(409, {'error':f'Provider "{name}" 已存在'})
+            if self.path=='/api/admin/provider-presets':
+                if not require_admin(self): return
+                presets=[
+                    {'name':'DeepSeek','baseUrl':'https://api.deepseek.com','models':['deepseek-chat','deepseek-reasoner'],'note':'官方 OpenAI-compatible 接口；deepseek-chat 适合通用分析，deepseek-reasoner 适合推理。'},
+                    {'name':'Kimi / Moonshot','baseUrl':'https://api.moonshot.cn/v1','models':['kimi-k2-0905-preview','kimi-latest'],'note':'Moonshot/Kimi OpenAI-compatible 接口；实际可用模型以“从 API 拉取模型”为准。'},
+                    {'name':'OpenCode Go','baseUrl':'https://opencode.ai/zen/go/v1','models':['deepseek-v4-pro'],'note':'OpenCode Go 兼容接口。'},
+                ]
+                return self.send_json(200, {'ok':True,'items':presets})
             if self.path=='/api/admin/models':
                 if not require_admin(self): return
                 d=read_json(self); t=now()
@@ -432,7 +460,7 @@ class Handler(SimpleHTTPRequestHandler):
                 start=time.time(); data=read_json(self); model=None
                 try:
                     if not re.match(r'^https?://',data.get('url','')): raise RuntimeError('请输入 http/https 学习链接')
-                    with db() as con: model=select_model(con)
+                    with db() as con: model=select_model(con, data.get('modelId') or data.get('model'))
                     proxy = model.get('proxy') or os.getenv('HTTP_PROXY', '') or os.getenv('HTTPS_PROXY', '')
                     ctx=collect_context(data['url'], proxy=proxy); plan=call_model(model,ctx,data, proxy=proxy)
                     with db() as con: execute(con, 'insert into call_logs(client_name,template,provider_name,model_id,success,latency_ms,error_message,error_detail,created_at) values(?,?,?,?,?,?,?,?,?)',(data.get('clientName','learning-tracker'),data.get('template','learning_plan'),model['provider_name'],model['model_id'],1,int((time.time()-start)*1000),'','',now())); con.commit()

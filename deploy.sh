@@ -72,6 +72,7 @@ services:
       PORT: "8010"
       AI_HUB_URL: http://ai-hub:8020
       AI_HUB_TOKEN: \${AI_HUB_INTERNAL_TOKEN}
+      AI_HUB_ADMIN_TOKEN: \${AI_HUB_ADMIN_TOKEN}
       MYSQL_HOST: \${DB_HOST:-host.docker.internal}
       MYSQL_PORT: \${DB_PORT:-3306}
       MYSQL_DB: \${DB_NAME:-learning_tracker}
@@ -84,8 +85,8 @@ services:
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    ports:
-      - "${AI_HUB_PORT}:8020"
+    expose:
+      - "8020"
     environment:
       PORT: "8020"
       DB_ENGINE: mysql

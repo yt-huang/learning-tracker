@@ -50,6 +50,7 @@
         <button data-view="plans" class="nav-btn">学习计划</button>
         <button data-view="logs" class="nav-btn">学习日志</button>
         <button data-view="users" class="nav-btn admin-only hidden">用户管理</button>
+        <button data-view="ai-config" class="nav-btn admin-only hidden">AI 模型配置</button>
         <button data-view="data" class="nav-btn">数据管理</button>
       </nav>
       <div id="user-badge" class="user-badge"></div>
@@ -69,6 +70,7 @@
       <section id="plan-detail-view" class="view hidden"></section>
       <section id="logs-view" class="view hidden"></section>
       <section id="users-view" class="view hidden"></section>
+      <section id="ai-config-view" class="view hidden"></section>
       <section id="data-view" class="view hidden"></section>
     </section>
   </main>
@@ -88,6 +90,9 @@
         <label>难度<select id="plan-difficulty"><option>入门</option><option selected>进阶</option><option>高级</option></select></label>
         <label>预计总小时<input id="plan-hours" type="number" min="1" value="12" /></label>
       </div>
+      <label>分析模型
+        <select id="ai-model-select"><option value="">默认模型（管理员配置）</option></select>
+      </label>
       <div id="ai-analysis-preview" class="ai-preview hidden"></div>
       <div class="modal-actions">
         <button type="button" class="ghost" id="cancel-plan">取消</button>

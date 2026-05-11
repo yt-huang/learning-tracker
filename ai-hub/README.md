@@ -1,25 +1,20 @@
 # AI Analysis Hub
 
-独立 AI 分析管理系统，用于统一配置 OpenCode Go / DeepSeek / OpenAI 等 OpenAI-Compatible Provider、模型和 API Key，并通过内网 API 给 `learning-tracker` 调用。
+独立 AI 分析服务，用于统一配置 OpenCode Go / DeepSeek / Kimi / OpenAI 等 OpenAI-Compatible Provider、模型和 API Key，并通过 Docker 内网 API 给 `learning-tracker` 调用。
 
-## Docker Compose 默认部署（复用现有 MySQL 持久化）
+## 部署方式
 
-`docker-compose.yml` 默认复用虚拟机已有的后端 MySQL，不再额外启动一套 MySQL。第三方模型 Key 不需要写入 `.env`：
+生产环境中 AI Hub 不再直接暴露公网 Admin UI。`docker-compose.yml` 只 `expose: 8020`，由 `learning-tracker` 后端代理管理接口：
+
+- 管理入口：登录 `Learning Tracker` 后，管理员进入「AI 模型配置」
+- 普通用户入口：创建学习计划时，在「分析模型」下拉框选择已启用模型
+- MySQL：复用虚拟机现有后端 MySQL（默认 `host.docker.internal:3306`）
 
 ```bash
 docker compose up -d --build
 ```
 
-- Admin UI: `http://服务器IP:8020/`
-- Health: `http://服务器IP:8020/health`
-- 默认账号：`admin / admin`
-- MySQL：虚拟机现有后端 MySQL（默认 `host.docker.internal:3306`）
-
-首次进入后台后，在页面中完成配置：
-
-1. Provider 页面输入名称、API URL（Base URL）和 API Key。
-2. Models 页面手动添加模型 ID，或点击“从 API 拉取模型”批量导入。
-3. 勾选默认模型后点击“测试默认模型”。
+第三方模型 Key 不需要写入 `.env`。管理员在前端页面录入后，AI Hub 加密保存到 MySQL。
 
 ## 可选环境变量
 
@@ -42,70 +37,60 @@ AI_HUB_MASTER_KEY=dev-master-key-change-me
 说明：
 
 - `AI_HUB_MASTER_KEY` 用于加密数据库里的 API Key。
-- `AI_HUB_INTERNAL_TOKEN` 是业务系统内网调用 API 时使用的 Bearer Token。
+- `AI_HUB_INTERNAL_TOKEN` 是业务系统内网调用分析 API 和只读模型列表时使用的 Bearer Token。
+- `AI_HUB_ADMIN_TOKEN` 仅供 `learning-tracker` 后端代理管理员配置接口使用，不给浏览器普通用户。
 - 本地开发如未安装 PyMySQL，或显式设置 `DB_ENGINE=sqlite`，会 fallback 到 SQLite：`/data/ai_hub.db`。
 
-## OpenCode Go 配置
+## Provider 对接方式
 
-在后台页面添加 Provider：
+### DeepSeek
+
+```text
+名称：DeepSeek
+Base URL：https://api.deepseek.com
+模型：deepseek-chat / deepseek-reasoner
+```
+
+AI Hub 兼容 DeepSeek Chat Completions，并对 DeepSeek 跳过强制 `response_format`，避免兼容问题。
+
+### Kimi / Moonshot
+
+```text
+名称：Kimi / Moonshot
+Base URL：https://api.moonshot.cn/v1
+模型：建议从 API 拉取；可手动添加 kimi-k2-0905-preview / kimi-latest
+```
+
+### OpenCode Go
 
 ```text
 名称：OpenCode Go
 Base URL：https://opencode.ai/zen/go/v1
-API Key：你的 OpenCode Go API Key
-启用：是
-```
-
-添加 Model：
-
-```text
-Provider：OpenCode Go
-模型 ID：deepseek-v4-pro
-显示名称：DeepSeek V4 Pro
-用途：learning_plan
-默认：是
-```
-
-可选模型包括：
-
-```text
-deepseek-v4-flash
-deepseek-v4-pro
-glm-5
-glm-5.1
-kimi-k2.5
-kimi-k2.6
-mimo-v2.5
-mimo-v2.5-pro
-minimax-m2.5
-minimax-m2.7
-qwen3.5-plus
-qwen3.6-plus
+模型：deepseek-v4-pro
 ```
 
 ## 内网调用 API
 
+分析接口支持可选 `modelId`，不传则使用默认模型：
+
 ```bash
-curl -X POST http://127.0.0.1:8020/api/v1/analyze-learning-link \
-  -H 'Authorization: Bearer change-internal-token' \
+curl -X POST http://ai-hub:8020/api/v1/analyze-learning-link \
+  -H 'Authorization: Bearer change...ken' \
   -H 'Content-Type: application/json' \
   -d '{
     "clientName":"learning-tracker",
     "url":"https://github.com/yt-huang/learning-tracker",
     "goal":"学习架构和实现",
     "level":"进阶",
-    "hoursPerWeek":5
+    "hoursPerWeek":5,
+    "modelId":"1"
   }'
 ```
 
-## learning-tracker 接入
+只读模型列表接口：
 
-`learning-tracker` Docker 服务默认已经在 `docker-compose.yml` 中接入 AI Hub：
-
-```yaml
-environment:
-  AI_HUB_URL: http://ai-hub:8020
-  AI_HUB_TOKEN: dev-internal-token
+```bash
+curl http://ai-hub:8020/api/v1/models -H 'Authorization: Bearer change...ken'
 ```
 
-`learning-tracker` 不再需要保存任何第三方模型 API Key；第三方 API URL 和 Key 都在 AI Hub 后台页面录入并保存到 MySQL。
+管理员配置接口仍在 AI Hub 内部存在，但生产环境应只通过 `learning-tracker` 的 `/api/admin/ai/*` 代理访问。
