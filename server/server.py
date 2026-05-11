@@ -157,7 +157,7 @@ def init_mysql():
     if cur.fetchone()["cnt"] == 0:
         uid = uuid.uuid4().hex[:16]
         pwh = hash_password("07Apples@")
-        ts = now_iso()
+        ts = now_dt()
         cur.execute(
             "INSERT INTO users (id, username, password_hash, email, role, active, created_at, updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
             (uid, "admin@cpaas.io", pwh, "", "admin", 1, ts, ts),
