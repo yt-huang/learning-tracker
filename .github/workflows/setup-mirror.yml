@@ -20,7 +20,7 @@ jobs:
 
             # 1. 拉取并运行 dkturbo 镜像加速器（一次性配置工具）
             echo "=== 拉取并运行 dkturbo ==="
-            docker run --rm \
+            sudo docker run --rm \
               --name=dkturbo \
               -v /etc/docker:/etc/docker \
               -v /opt:/opt \
@@ -33,7 +33,7 @@ jobs:
 
             # 2. 检查 daemon.json 是否已更新
             echo "=== 当前 Docker daemon 配置 ==="
-            cat /etc/docker/daemon.json 2>/dev/null || echo "{}"
+            sudo cat /etc/docker/daemon.json 2>/dev/null || echo "{}"
 
             # 3. 重启 Docker 使镜像加速生效
             echo "=== 重启 Docker daemon ==="
@@ -42,9 +42,9 @@ jobs:
 
             # 4. 验证 Docker 正常
             echo "=== Docker info (Registry Mirrors) ==="
-            docker info 2>&1 | grep -A5 "Registry Mirrors" || echo "未检测到镜像加速配置"
+            sudo docker info 2>&1 | grep -A5 "Registry Mirrors" || echo "未检测到镜像加速配置"
 
             echo "=== Docker 容器状态 ==="
-            docker ps -a --format 'table {{.Names}}\t{{.Status}}'
+            sudo docker ps -a --format 'table {{.Names}}\t{{.Status}}'
 
             echo "=== 镜像加速器部署完成 ==="
