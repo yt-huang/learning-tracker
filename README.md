@@ -131,6 +131,8 @@ environment:
   AI_HUB_URL: http://ai-hub:8020
   AI_HUB_TOKEN: dev-internal-token
   AI_HUB_ADMIN_TOKEN: dev-admin-token
+  AI_HUB_TIMEOUT: 300          # learning-tracker 等待 AI Hub 分析结果
+  AI_PROVIDER_TIMEOUT: 180     # AI Hub 等待 DeepSeek/Kimi/OpenCode Go 返回
 ```
 
 AI Hub 内部分析接口支持可选 `modelId`：

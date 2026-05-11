@@ -73,6 +73,8 @@ services:
       AI_HUB_URL: http://ai-hub:8020
       AI_HUB_TOKEN: \${AI_HUB_INTERNAL_TOKEN}
       AI_HUB_ADMIN_TOKEN: \${AI_HUB_ADMIN_TOKEN}
+      AI_HUB_TIMEOUT: \${AI_HUB_TIMEOUT:-300}
+      AI_DIRECT_TIMEOUT: \${AI_DIRECT_TIMEOUT:-180}
       MYSQL_HOST: \${DB_HOST:-host.docker.internal}
       MYSQL_PORT: \${DB_PORT:-3306}
       MYSQL_DB: \${DB_NAME:-learning_tracker}
@@ -100,6 +102,7 @@ services:
       AI_HUB_ADMIN_TOKEN: \${AI_HUB_ADMIN_TOKEN}
       AI_HUB_INTERNAL_TOKEN: \${AI_HUB_INTERNAL_TOKEN}
       AI_HUB_MASTER_KEY: \${AI_HUB_MASTER_KEY}
+      HTTP_TIMEOUT: \${AI_PROVIDER_TIMEOUT:-180}
     healthcheck:
       test: ["CMD-SHELL", "python3 - <<'PY'\nimport urllib.request\nurllib.request.urlopen('http://127.0.0.1:8020/health', timeout=3).read()\nPY"]
       interval: 10s

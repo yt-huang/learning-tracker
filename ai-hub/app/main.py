@@ -28,7 +28,7 @@ ADMIN_TOKEN = os.getenv("AI_HUB_ADMIN_TOKEN", "dev-admin-token")
 INTERNAL_TOKEN = os.getenv("AI_HUB_INTERNAL_TOKEN", "dev-internal-token")
 MASTER_KEY = os.getenv("AI_HUB_MASTER_KEY", "dev-master-key-change-me")
 MAX_CONTENT_CHARS = 14000
-HTTP_TIMEOUT = int(os.getenv("HTTP_TIMEOUT", "30"))
+HTTP_TIMEOUT = int(os.getenv("HTTP_TIMEOUT", "180"))
 
 
 def now(): return datetime.utcnow().isoformat()
@@ -310,6 +310,8 @@ def call_model(m, ctx, data, proxy=''):
     if not any(x in provider_hint for x in ('deepseek', 'api.deepseek.com')):
         body['response_format']={'type':'json_object'}
     opener = build_opener(proxy)
+    ctx_len = len(json.dumps(ctx, ensure_ascii=False))
+    print(f"[AI Hub] Calling {m.get('provider_name')}/{m.get('model_id')} timeout={HTTP_TIMEOUT}s ctx={ctx_len} chars", file=sys.stderr, flush=True)
     req=urllib.request.Request(m['base_url'].rstrip('/')+'/chat/completions',data=json.dumps(body).encode(),headers={'Content-Type':'application/json','Authorization':f'Bearer {key}'},method='POST')
     with opener.open(req,timeout=HTTP_TIMEOUT) as resp: payload=json.loads(resp.read().decode())
     plan=extract_json(payload['choices'][0]['message']['content']); plan['aiUsed']=True

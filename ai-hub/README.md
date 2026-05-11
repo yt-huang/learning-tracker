@@ -32,6 +32,9 @@ ADMIN_PASSWORD=admin
 AI_HUB_ADMIN_TOKEN=dev-admin-token
 AI_HUB_INTERNAL_TOKEN=dev-internal-token
 AI_HUB_MASTER_KEY=dev-master-key-change-me
+AI_HUB_TIMEOUT=300          # learning-tracker 等待 AI Hub 分析结果
+AI_PROVIDER_TIMEOUT=180     # AI Hub 等待第三方大模型返回
+AI_DIRECT_TIMEOUT=180       # legacy direct-provider fallback timeout
 ```
 
 说明：

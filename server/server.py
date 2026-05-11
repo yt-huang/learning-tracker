@@ -438,7 +438,9 @@ def call_ai_hub(url: str, goal: str, level: str, hours_per_week: int, model_id: 
     body = {"clientName": "learning-tracker", "template": "learning_plan", "url": url, "goal": goal, "level": level, "hoursPerWeek": hours_per_week}
     if model_id:
         body["modelId"] = model_id
-    payload = ai_hub_request("/api/v1/analyze-learning-link", method="POST", body=body, timeout=120)
+    timeout = int(os.getenv("AI_HUB_TIMEOUT", "300"))
+    print(f"[AI-Hub] Analyze via hub timeout={timeout}s modelId={model_id or 'default'}", file=sys.stderr, flush=True)
+    payload = ai_hub_request("/api/v1/analyze-learning-link", method="POST", body=body, timeout=timeout)
     plan = payload.get("plan")
     if isinstance(plan, dict):
         provider = payload.get("provider") or "AI Hub"
@@ -525,7 +527,7 @@ def call_ai(ctx: dict, goal: str, level: str, hours_per_week: int) -> dict | Non
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=90) as resp:
+        with urllib.request.urlopen(req, timeout=int(os.getenv("AI_DIRECT_TIMEOUT", "180"))) as resp:
             payload = json.loads(resp.read().decode("utf-8"))
         content = payload["choices"][0]["message"]["content"]
         plan = extract_json(content)
