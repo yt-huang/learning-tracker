@@ -169,6 +169,7 @@ jobs:
               ai_hub_mysql:
             COMPOSE
             sudo docker compose pull
+            sudo docker rm -f learning-tracker ai-analysis-hub 2>/dev/null || true
             sudo docker compose up -d
             sudo docker image prune -f
             sudo docker compose ps
