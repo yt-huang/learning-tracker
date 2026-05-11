@@ -234,6 +234,8 @@ jobs:
                   retries: 12
                   start_period: 20s
             COMPOSE
+            # Ensure mysql-lt is running (may have been stopped by Docker restart)
+            sudo docker start mysql-lt 2>/dev/null || true
             sudo docker compose pull
             sudo docker rm -f learning-tracker ai-analysis-hub learning-tracker-mysql 2>/dev/null || true
             sudo docker compose up -d
