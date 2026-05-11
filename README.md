@@ -29,7 +29,7 @@
 learning-tracker :8010
   ↓ Docker 内网 HTTP
 ai-hub :8020
-  ↔ MySQL :3306（持久化 Provider/Model/Key/Log）
+  ↔ VM 现有 MySQL :3306（持久化 Provider/Model/Key/Log）
   ↓ OpenAI-compatible API
 OpenCode Go / DeepSeek / OpenAI / Kimi / Qwen
 ```
@@ -42,7 +42,7 @@ OpenCode Go / DeepSeek / OpenAI / Kimi / Qwen
 docker compose up -d --build
 ```
 
-默认 Compose 已内置 MySQL 和开发可用账号密码；第三方模型 API URL/Key 在 AI Hub 页面录入，不需要写入环境变量。
+默认 Compose 复用虚拟机现有 MySQL；第三方模型 API URL/Key 在 AI Hub 页面录入，不需要写入环境变量。
 
 访问：
 
@@ -132,8 +132,8 @@ Learning Tracker 业务数据表：
 AI Hub 数据库：
 
 ```text
-Docker volume: ai_hub_mysql
-MySQL database: ai_hub
+MySQL: VM existing backend MySQL
+Database: learning_tracker（可通过 DB_NAME 覆盖）
 ```
 
 包含：

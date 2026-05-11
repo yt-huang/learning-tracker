@@ -2,9 +2,9 @@
 
 独立 AI 分析管理系统，用于统一配置 OpenCode Go / DeepSeek / OpenAI 等 OpenAI-Compatible Provider、模型和 API Key，并通过内网 API 给 `learning-tracker` 调用。
 
-## Docker Compose 默认部署（MySQL 持久化）
+## Docker Compose 默认部署（复用现有 MySQL 持久化）
 
-`docker-compose.yml` 已内置 MySQL 8.4，默认账号密码会自动创建，不需要为了第三方模型 Key 编写 `.env`：
+`docker-compose.yml` 默认复用虚拟机已有的后端 MySQL，不再额外启动一套 MySQL。第三方模型 Key 不需要写入 `.env`：
 
 ```bash
 docker compose up -d --build
@@ -13,7 +13,7 @@ docker compose up -d --build
 - Admin UI: `http://服务器IP:8020/`
 - Health: `http://服务器IP:8020/health`
 - 默认账号：`admin / admin`
-- MySQL 数据卷：`ai_hub_mysql`
+- MySQL：虚拟机现有后端 MySQL（默认 `host.docker.internal:3306`）
 
 首次进入后台后，在页面中完成配置：
 
@@ -23,15 +23,15 @@ docker compose up -d --build
 
 ## 可选环境变量
 
-通常不需要设置。只有需要覆盖默认 MySQL/管理员配置时才使用：
+通常不需要设置。只有需要覆盖现有 MySQL/管理员配置时才使用：
 
 ```bash
 DB_ENGINE=mysql
-DB_HOST=mysql
+DB_HOST=host.docker.internal
 DB_PORT=3306
-DB_NAME=ai_hub
-DB_USER=ai_hub
-DB_PASSWORD=ai_hub_password
+DB_NAME=learning_tracker
+DB_USER=lt_user
+DB_PASSWORD=change-me
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=admin
 AI_HUB_ADMIN_TOKEN=dev-admin-token
