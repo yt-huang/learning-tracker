@@ -50,17 +50,23 @@ class TestAuth(unittest.TestCase):
                 time.sleep(1)
         else:
             raise RuntimeError(f"Server not reachable at {BASE}")
+        # Ensure admin user exists
+        api("POST", "/api/auth/register", {
+            "username": ADMIN_USER,
+            "password": ADMIN_PASS,
+            "email": "admin@test.com",
+        })
 
-    def test_register_first_user(self):
-        """First user becomes admin."""
+    def test_register_duplicate_rejected(self):
+        """Registering an existing user should fail."""
         resp = api("POST", "/api/auth/register", {
             "username": ADMIN_USER,
             "password": ADMIN_PASS,
             "email": "admin@test.com",
         })
-        self.assertTrue(resp.get("ok"), f"Register failed: {resp}")
-        self.assertEqual(resp.get("user", {}).get("role"), "admin")
-        self.assertTrue(resp.get("user", {}).get("active"))
+        # Already registered in setUpClass, should get 409
+        self.assertFalse(resp.get("ok"))
+        self.assertIn("已存在", resp.get("error", ""))
 
     def test_login_success(self):
         resp = api("POST", "/api/auth/login", {"username": ADMIN_USER, "password": ADMIN_PASS})
