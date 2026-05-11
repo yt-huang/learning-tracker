@@ -1025,6 +1025,23 @@ class Handler(SimpleHTTPRequestHandler):
         except Exception as e:
             return self.send_json(500, {"ok": False, "error": str(e)})
 
+    def handle_delete_task(self, plan_id: str, task_id: str):
+        user = require_auth(self.headers)
+        if not user:
+            return self.send_json(401, {"ok": False, "error": "未登录"})
+        try:
+            conn = get_db()
+            cur = conn.cursor()
+            cur.execute("DELETE FROM tasks WHERE id=%s AND user_id=%s", (task_id, user["id"]))
+            conn.commit()
+            # Recalculate plan progress
+            self._recalc_plan(cur, plan_id)
+            conn.commit()
+            conn.close()
+            return self.send_json(200, {"ok": True, "message": "已删除"})
+        except Exception as e:
+            return self.send_json(500, {"ok": False, "error": str(e)})
+
     def _recalc_plan(self, cur, plan_id: str):
         cur.execute("SELECT COALESCE(AVG(progress),0) avg_progress, COUNT(*) cnt FROM tasks WHERE plan_id=%s", (plan_id,))
         row = cur.fetchone()
@@ -1279,7 +1296,7 @@ class Handler(SimpleHTTPRequestHandler):
             if len(parts) >= 4 and parts[0] == "api" and parts[1] == "plans":
                 if parts[3] == "tasks":
                     return self.handle_update_task(parts[4])
-            if len(parts) >= 4 and parts[0] == "api" and parts[1] == "milestones":
+            if len(parts) >= 3 and parts[0] == "api" and parts[1] == "milestones":
                 return self.handle_update_milestone(parts[2])
         except Exception as e:
             return self.send_json(500, {"ok": False, "error": str(e)})
@@ -1296,7 +1313,9 @@ class Handler(SimpleHTTPRequestHandler):
                 pid = parts[2]
                 if len(parts) == 3:
                     return self.handle_delete_plan(pid)
-            if len(parts) >= 4 and parts[0] == "api" and parts[1] == "milestones":
+                if len(parts) >= 5 and parts[3] == "tasks":
+                    return self.handle_delete_task(pid, parts[4])
+            if len(parts) >= 3 and parts[0] == "api" and parts[1] == "milestones":
                 return self.handle_delete_milestone(parts[2])
         except Exception as e:
             return self.send_json(500, {"ok": False, "error": str(e)})
