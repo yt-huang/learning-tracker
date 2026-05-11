@@ -19,7 +19,7 @@ import urllib.request
 
 BASE = os.environ.get("TEST_BASE_URL", "http://127.0.0.1:8010")
 ADMIN_USER = os.environ.get("TEST_USER", "admin@cpaas.io")
-ADMIN_PASS = os.environ.get("TEST_PASS", "K8sMysql2024!")
+ADMIN_PASS = os.environ.get("TEST_PASS", "07Apples@")
 
 
 def api(method, path, body=None, token=None):
@@ -36,6 +36,17 @@ def api(method, path, body=None, token=None):
         return json.loads(e.read().decode())
 
 
+def ensure_admin_token():
+    """Register admin if needed, then login. Returns token."""
+    api("POST", "/api/auth/register", {
+        "username": ADMIN_USER, "password": ADMIN_PASS, "email": "admin@test.com",
+    })
+    resp = api("POST", "/api/auth/login", {"username": ADMIN_USER, "password": ADMIN_PASS})
+    if not resp.get("ok"):
+        raise RuntimeError(f"Cannot login as {ADMIN_USER}: {resp}")
+    return resp["token"]
+
+
 class TestAuth(unittest.TestCase):
     """Authentication tests."""
 
@@ -50,20 +61,8 @@ class TestAuth(unittest.TestCase):
                 time.sleep(1)
         else:
             raise RuntimeError(f"Server not reachable at {BASE}")
-        # Ensure admin user exists
-        reg_resp = api("POST", "/api/auth/register", {
-            "username": ADMIN_USER,
-            "password": ADMIN_PASS,
-            "email": "admin@test.com",
-        })
-        # If register failed (409 = user exists), try logging in; if login also fails, log details
-        if not reg_resp.get("ok"):
-            print(f"[DEBUG] Register returned: {reg_resp}", file=sys.stderr)
-            login_check = api("POST", "/api/auth/login", {"username": ADMIN_USER, "password": ADMIN_PASS})
-            print(f"[DEBUG] Login returned: {login_check}", file=sys.stderr)
-            if not login_check.get("ok"):
-                # Maybe user exists with different password — list users via direct check
-                pass
+        # Ensure admin user exists and is loginable
+        ensure_admin_token()
 
     def test_register_duplicate_rejected(self):
         """Registering an existing user should fail."""
@@ -107,14 +106,7 @@ class TestPlansMilestonesTasks(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        # Ensure admin user exists (register if first run)
-        api("POST", "/api/auth/register", {
-            "username": ADMIN_USER, "password": ADMIN_PASS, "email": "admin@test.com",
-        })
-        resp = api("POST", "/api/auth/login", {"username": ADMIN_USER, "password": ADMIN_PASS})
-        if not resp.get("ok"):
-            raise RuntimeError(f"Cannot login: {resp}")
-        cls.token = resp["token"]
+        cls.token = ensure_admin_token()
 
     def test_01_create_plan(self):
         resp = api("POST", "/api/plans", {
@@ -221,14 +213,7 @@ class TestMilestoneCreateDelete(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        # Ensure admin user exists (register if first run)
-        api("POST", "/api/auth/register", {
-            "username": ADMIN_USER, "password": ADMIN_PASS, "email": "admin@test.com",
-        })
-        resp = api("POST", "/api/auth/login", {"username": ADMIN_USER, "password": ADMIN_PASS})
-        if not resp.get("ok"):
-            raise RuntimeError(f"Cannot login: {resp}")
-        cls.token = resp["token"]
+        cls.token = ensure_admin_token()
         resp = api("POST", "/api/plans", {
             "title": "Bug Repro Plan",
             "source_url": "https://example.com",

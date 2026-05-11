@@ -156,13 +156,15 @@ def init_mysql():
     cur.execute("SELECT COUNT(*) cnt FROM users")
     if cur.fetchone()["cnt"] == 0:
         uid = uuid.uuid4().hex[:16]
-        pwh = hash_password("07Apples@")
+        admin_user = os.getenv("ADMIN_USERNAME", "admin@cpaas.io")
+        admin_pass = os.getenv("ADMIN_PASSWORD", "07Apples@")
+        pwh = hash_password(admin_pass)
         ts = now_dt()
         cur.execute(
             "INSERT INTO users (id, username, password_hash, email, role, active, created_at, updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
-            (uid, "admin@cpaas.io", pwh, "", "admin", 1, ts, ts),
+            (uid, admin_user, pwh, "", "admin", 1, ts, ts),
         )
-        print("ℹ️  Created admin user: admin@cpaas.io / 07Apples@", flush=True)
+        print(f"ℹ️  Created admin user: {admin_user}", flush=True)
     conn.commit()
     conn.close()
 
