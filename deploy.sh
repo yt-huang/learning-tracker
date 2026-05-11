@@ -56,6 +56,11 @@ services:
       PORT: "8010"
       AI_HUB_URL: http://ai-hub:8020
       AI_HUB_TOKEN: \${AI_HUB_INTERNAL_TOKEN}
+      MYSQL_HOST: mysql
+      MYSQL_PORT: "3306"
+      MYSQL_DB: \${DB_NAME:-ai_hub}
+      MYSQL_USER: \${DB_USER:-ai_hub}
+      MYSQL_PASS: \${DB_PASSWORD:-ai_hub_password}
 
   mysql:
     image: mysql:8.4
