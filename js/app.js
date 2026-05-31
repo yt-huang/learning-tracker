@@ -1,6 +1,7 @@
 import { Auth } from './auth.js';
 import { LearningDB } from './db.js';
 import { generateLearningPlan, inferTitleFromUrl, templates } from './planner.js';
+import { M } from './motion.js';
 
 const db = new LearningDB();
 let currentView = 'dashboard';
@@ -9,7 +10,7 @@ let planCache = {}; // plan_id -> {plan, milestones, logs}
 
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
-function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.remove('hidden'); setTimeout(() => t.classList.add('hidden'), 2200); }
+function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.remove('hidden'); M.pulse(t); setTimeout(() => t.classList.add('hidden'), 2200); }
 function showLoading(msg = '加载中...') { $('#loading-text').textContent = msg; $('#loading').classList.remove('hidden'); }
 function hideLoading() { $('#loading').classList.add('hidden'); }
 function minutes(m) { const h = Math.floor((m || 0) / 60); const min = (m || 0) % 60; return h ? `${h}h ${min}m` : `${min}m`; }
@@ -85,13 +86,19 @@ async function showApp() {
   await db.init();
   const user = Auth.getUser();
   $$('.admin-only').forEach(el => el.classList.toggle('hidden', !Auth.isAdmin()));
-  $('#user-badge').innerHTML = user ? `<span style="font-size:13px;color:var(--muted)">${user.username}${user.role === 'admin' ? ' 🔑' : ''}</span>` : '';
+  $('#user-badge').innerHTML = user ? `<div style="display:flex;align-items:center;gap:8px"><div class="avatar">${user.username[0].toUpperCase()}</div><div><span style="font-size:13px;color:var(--text-secondary);display:block">${user.username}</span><span style="font-size:11px;color:var(--text-muted)">${user.role === 'admin' ? '管理员' : '用户'}</span></div></div>` : '';
   try {
     const s = JSON.parse(localStorage.getItem('learning_tracker_session') || 'null');
     if (s && s.expiresAt) { const d = (s.expiresAt - Date.now()) / 86400000; if (d < 0) toast('会话已过期'); else if (d < 1) toast(`会话将在${Math.round(d*24)}小时后过期`); }
   } catch (e) {}
   bindApp();
   await render();
+  // Animate sidebar
+  M.ready.then(() => {
+    gsap.from('.sidebar', { x: -20, opacity: 0, duration: 0.4, ease: 'power3.out' });
+    gsap.from('.nav-btn', { x: -12, opacity: 0, duration: 0.3, stagger: 0.06, ease: 'power2.out', delay: 0.15 });
+    gsap.from('.topbar', { y: -12, opacity: 0, duration: 0.3, ease: 'power3.out', delay: 0.25 });
+  });
 }
 
 function showLogin() { $('#app').classList.add('hidden'); $('#login-screen').classList.remove('hidden'); showLoginCard(); $('#password').value = ''; $('#reg-password').value = ''; }
@@ -253,11 +260,11 @@ async function renderDashboard() {
   hideLoading();
   const emptyPlans = plans.length === 0 ? '<div class="empty-state"><p>还没有学习计划</p><button class="hollow" id="empty-new-plan">+ 从链接生成计划</button></div>' : '';
   $('#dashboard-view').innerHTML = `
-    <div class="stats-grid">
-      <div class="stat"><b>${stats.total || 0}</b><span>学习计划</span></div>
-      <div class="stat"><b>${stats.completed || 0}</b><span>已完成</span></div>
-      <div class="stat"><b>${Math.round(Number(stats.avg_progress) || 0)}%</b><span>平均进度</span></div>
-      <div class="stat"><b>${minutes(stats.total_minutes || 0)}</b><span>总学习时长</span></div>
+    <div class="stats-grid" data-animate>
+      <div class="stat"><b class="stat-val" data-count="${stats.total || 0}">0</b><span>学习计划</span></div>
+      <div class="stat"><b class="stat-val" data-count="${stats.completed || 0}">0</b><span>已完成</span></div>
+      <div class="stat"><b class="stat-val" data-count="${Math.round(Number(stats.avg_progress) || 0)}">0%</b><span>平均进度</span></div>
+      <div class="stat"><b class="stat-val" data-count="${minutes(stats.total_minutes || 0)}">0</b><span>总学习时长</span></div>
     </div>
     <div class="grid-2 layout-gap">
       <section class="panel"><h3>进行中的计划</h3>${emptyPlans || plans.slice(0,4).map(planCard).join('') || '<p class="muted">暂无计划</p>'}</section>
@@ -265,6 +272,13 @@ async function renderDashboard() {
     </div>`;
   bindPlanCards();
   $('#empty-new-plan')?.addEventListener('click', () => $('#plan-dialog').showModal());
+  // Animate
+  M.staggerIn($('#dashboard-view'));
+  $$('.stat-val').forEach(el => {
+    const target = el.dataset.count;
+    if (target && target.includes('h')) { el.textContent = target; return; }
+    M.countUp(el, target);
+  });
 }
 
 function planCard(p) {
@@ -280,6 +294,7 @@ function bindPlanCards() {
   $$('[data-edit-plan]').forEach(b => b.onclick = async (e) => { e.stopPropagation(); editPlanDialog(b.dataset.editPlan); });
   $$('[data-duplicate-plan]').forEach(b => b.onclick = async (e) => {
     e.stopPropagation();
+    M.pulse(b);
     const nid = await db.duplicatePlan(b.dataset.duplicatePlan);
     toast(nid ? '计划已复制' : '复制失败');
     if (nid) await render();
@@ -317,8 +332,10 @@ async function renderPlans() {
   $('#plans-view').innerHTML = `<div class="toolbar"><input id="search" placeholder="搜索标题/分类/链接" /><select id="status-filter"><option value="">全部状态</option><option value="not_started">未开始</option><option value="in_progress">进行中</option><option value="completed">已完成</option></select></div><div id="plans-list" class="plans-list"></div>`;
   const draw = () => {
     const q = $('#search').value.toLowerCase(), s = $('#status-filter').value;
-    $('#plans-list').innerHTML = plans.filter(p => (!s || p.status === s) && JSON.stringify(p).toLowerCase().includes(q)).map(planCard).join('') || '<p class="muted">没有匹配计划</p>';
+    const items = plans.filter(p => (!s || p.status === s) && JSON.stringify(p).toLowerCase().includes(q));
+    $('#plans-list').innerHTML = items.map(planCard).join('') || '<p class="muted">没有匹配计划</p>';
     bindPlanCards();
+    M.staggerIn($('#plans-list'));
   };
   $('#search').oninput = draw; $('#status-filter').onchange = draw; draw();
 }
@@ -345,20 +362,25 @@ async function renderPlanDetail() {
 
   $('#plan-detail-view').innerHTML = `
     <button class="ghost" id="back-plans">← 返回计划</button>
-    <section class="panel hero"><div><h2>${planData.title}</h2><p>${planData.description || ''}</p><a href="${planData.source_url}" target="_blank">${planData.source_url || ''}</a></div><div class="big-progress"><b>${planData.progress}%</b><span>完成进度</span></div></section>
+    <section class="panel hero"><div><h2>${planData.title}</h2><p>${planData.description || ''}</p><a href="${planData.source_url}" target="_blank">${planData.source_url || ''}</a></div><div class="big-progress"><b class="progress-val" data-pct="${planData.progress}">0%</b><span>完成进度</span></div></section>
     <div class="milestone-toolbar"><select id="template-select"><option value="">套用模板</option>${tmplKeys.map(k => `<option value="${k}">${k}</option>`).join('')}</select><button class="ghost" id="add-milestone-btn">+ 添加阶段</button></div>
-    <div class="milestones">${milestones.map(m => milestoneCard(m, logsByTask)).join('')}</div>
+    <div class="milestones" data-animate-milestones>${milestones.map(m => milestoneCard(m, logsByTask)).join('')}</div>
     <section class="panel"><h3>本计划日志 <button class="ghost-sm" id="add-plan-log-btn" style="margin-left:8px">+ 添加日志</button></h3>${planLogs.concat(logs.filter(l => l.task_id)).slice(0,20).map(logItem).join('') || '<p class="muted">暂无日志</p>'}</section>`;
 
   $('#back-plans').onclick = () => switchView('plans');
   $('#back-to-top').onclick = () => document.getElementById('plan-detail-view')?.scrollIntoView({behavior:'smooth'});
   bindPlanDetailMilestones(planData.id, milestones);
   bindTaskButtons();
+  // Animate
+  M.sectionIn($('#plan-detail-view'));
+  M.milestoneReveal($('#plan-detail-view'));
+  const pctEl = $('.progress-val');
+  if (pctEl) M.countUp(pctEl, planData.progress);
 }
 
 function milestoneCard(m, logsByTask) {
   const tasks = m.tasks || [];
-  return `<section class="panel" data-milestone="${m.id}">
+  return `<section class="panel" data-milestone="${m.id}" data-animate-milestone>
     <div class="milestone-header">
       <span class="milestone-title" data-milestone-edit="${m.id}">${m.title}</span>
       <div class="milestone-actions">
@@ -392,7 +414,13 @@ function bindTaskButtons() {
       const taskEl = slider.closest('.task');
       if (taskEl) {
         const bar = taskEl.querySelector('.progress');
-        if (bar) { bar.className = 'progress ' + progBarClass(val); const span = bar.querySelector('span'); if (span) span.style.width = val + '%'; }
+        if (bar) {
+          const span = bar.querySelector('span');
+          if (span) {
+            M.animateProgress(span, val);
+            bar.className = 'progress ' + progBarClass(val);
+          }
+        }
       }
     };
   });
@@ -475,7 +503,7 @@ async function renderLogs() {
   const [plans, allLogs] = await Promise.all([db.getPlans(), db.getLogs()]);
   hideLoading();
   $('#logs-view').innerHTML = `<div class="toolbar"><select id="logs-plan-filter"><option value="">全部计划</option>${plans.map(p => `<option value="${p.id}">${p.title}</option>`).join('')}</select><button class="ghost" id="add-log-global">+ 添加日志</button></div><section class="panel" id="logs-list">${allLogs.map(logItem).join('') || '<p class="muted">暂无日志</p>'}</section>`;
-  const filterDraw = () => { const pid = $('#logs-plan-filter').value; const filtered = pid ? allLogs.filter(l => l.plan_id === pid) : allLogs; $('#logs-list').innerHTML = filtered.map(logItem).join('') || '<p class="muted">暂无日志</p>'; };
+  const filterDraw = () => { const pid = $('#logs-plan-filter').value; const filtered = pid ? allLogs.filter(l => l.plan_id === pid) : allLogs; $('#logs-list').innerHTML = filtered.map(logItem).join('') || '<p class="muted">暂无日志</p>'; M.staggerIn($('#logs-list')); };
   $('#logs-plan-filter').onchange = filterDraw;
   $('#add-log-global').onclick = () => { $('#log-plan-id').value = ''; $('#log-task-id').value = ''; $('#log-dialog').showModal(); };
   $$('[data-log-nav]').forEach(el => el.onclick = async () => { const pid = el.dataset.logPlan; if (pid) { currentPlanId = pid; currentView = 'detail'; await render(); } });

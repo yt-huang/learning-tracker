@@ -3,7 +3,10 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Learning Tracker · MySQL 学习计划跟踪系统</title>
+  <title>Learning Tracker · 学习计划跟踪系统</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,300;14..32,400;14..32,500;14..32,600;14..32,700;14..32,800&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="css/style.css" />
 </head>
 <body>
@@ -182,7 +185,10 @@
   </dialog>
 
   <div id="toast" class="toast hidden"></div>
-  <div id="loading" class="loading hidden"><div class="spinner"></div><span id="loading-text">加载中...</span></div>
+  <div id="loading" class="loading hidden">
+    <div class="loader-orb"></div>
+    <span id="loading-text">加载中...</span>
+  </div>
   <button id="back-to-top" class="back-to-top hidden">↑</button>
   <script type="module" src="js/app.js"></script>
 </body>
