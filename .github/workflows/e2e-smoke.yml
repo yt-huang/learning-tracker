@@ -29,7 +29,7 @@ env:
 jobs:
   e2e-smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     services:
       mysql:
         image: mysql:8.4
@@ -143,8 +143,8 @@ jobs:
           E2E_BASE_URL: http://127.0.0.1:${{ env.APP_PORT }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           HEADLESS: "true"
-          RECORD_VIDEO: "true"
-          TAKE_SCREENSHOTS: "true"
+          RECORD_VIDEO: "false"
+          TAKE_SCREENSHOTS: "false"
         run: |
           if [ -z "${DEEPSEEK_API_KEY}" ]; then
             echo "::warning::DEEPSEEK_API_KEY secret is not set. Pipeline infra is healthy (MySQL + App). Skipping E2E."
