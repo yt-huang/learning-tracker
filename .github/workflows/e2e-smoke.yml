@@ -146,6 +146,12 @@ jobs:
           RECORD_VIDEO: "true"
           TAKE_SCREENSHOTS: "true"
         run: |
+          if [ -z "${DEEPSEEK_API_KEY}" ]; then
+            echo "::warning::DEEPSEEK_API_KEY secret is not set. Pipeline infra is healthy (MySQL + App). Skipping E2E."
+            echo "Add it in: Settings > Secrets and variables > Actions > New repository secret"
+            echo "Name: DEEPSEEK_API_KEY, Value: your DeepSeek API key"
+            exit 1
+          fi
           chmod +x e2e/run_smoke.sh
           ./e2e/run_smoke.sh
 
