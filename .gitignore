@@ -4,3 +4,9 @@
 node_modules/
 .env
 *.log
+
+# E2E test artifacts
+e2e/output/
+e2e/proofs/
+e2e/log_files/
+e2e/.cache/

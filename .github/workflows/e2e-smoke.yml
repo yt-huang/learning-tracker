@@ -1,0 +1,198 @@
+name: e2e-smoke
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch: # 允许手动触发
+
+permissions:
+  contents: read
+
+env:
+  # MySQL 配置（与 build-and-deploy.yml test job 保持一致）
+  MYSQL_ROOT_PASSWORD: test_root_pass
+  MYSQL_DATABASE: learning_tracker
+  MYSQL_USER: lt_user
+  MYSQL_PASSWORD: LtTest2024!
+  # Learning Tracker 测试服务器端口（避开 CI 常用端口）
+  APP_PORT: "18010"
+  # 测试管理员账号
+  ADMIN_USERNAME: admin@cpaas.io
+  ADMIN_PASSWORD: K8sMysql2024!
+  # Hercules LLM 配置
+  LLM_MODEL: deepseek-chat
+  LLM_BASE_URL: https://api.deepseek.com/v1
+  LLM_API_TYPE: openai
+
+jobs:
+  e2e-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: ${{ env.MYSQL_ROOT_PASSWORD }}
+          MYSQL_DATABASE: ${{ env.MYSQL_DATABASE }}
+          MYSQL_USER: ${{ env.MYSQL_USER }}
+          MYSQL_PASSWORD: ${{ env.MYSQL_PASSWORD }}
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -u root -p${{ env.MYSQL_ROOT_PASSWORD }}"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=15
+
+    steps:
+      # ============================================================
+      # 1. Checkout 代码
+      # ============================================================
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      # ============================================================
+      # 2. 设置 Python 环境
+      # ============================================================
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # ============================================================
+      # 3. 安装系统依赖（mysql-client + gettext for envsubst）
+      # ============================================================
+      - name: 📦 Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq mysql-client gettext-base
+
+      # ============================================================
+      # 4. 安装 TestZeus Hercules + Playwright Chromium
+      # ============================================================
+      - name: 🤖 Install TestZeus Hercules
+        run: |
+          pip install testzeus-hercules pymysql cryptography
+          python -m playwright install chromium --with-deps
+          echo "✅ Hercules + Playwright installed"
+
+      # ============================================================
+      # 5. 等待 MySQL 就绪并初始化管理员用户
+      # ============================================================
+      - name: ⏳ Wait for MySQL
+        run: |
+          for i in $(seq 1 30); do
+            mysqladmin ping -h 127.0.0.1 -u root -p${{ env.MYSQL_ROOT_PASSWORD }} --silent && break
+            echo "Waiting for MySQL... ($i/30)"
+            sleep 2
+          done
+          mysqladmin ping -h 127.0.0.1 -u root -p${{ env.MYSQL_ROOT_PASSWORD }} --silent || exit 1
+          echo "✅ MySQL is ready"
+
+      # ============================================================
+      # 6. 启动 Learning Tracker 测试服务器
+      # ============================================================
+      - name: 🚀 Start Learning Tracker server
+        env:
+          MYSQL_HOST: 127.0.0.1
+          MYSQL_PORT: 3306
+          MYSQL_DB: ${{ env.MYSQL_DATABASE }}
+          MYSQL_USER: ${{ env.MYSQL_USER }}
+          MYSQL_PASS: ${{ env.MYSQL_PASSWORD }}
+          PORT: ${{ env.APP_PORT }}
+          ADMIN_USERNAME: ${{ env.ADMIN_USERNAME }}
+          ADMIN_PASSWORD: ${{ env.ADMIN_PASSWORD }}
+        run: |
+          python3 server/server.py &
+          SERVER_PID=$!
+          echo "SERVER_PID=$SERVER_PID" >> $GITHUB_ENV
+
+          # Wait for server to be ready (init_mysql creates tables)
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:${{ env.APP_PORT }}/ >/dev/null 2>&1 && break
+            echo "Waiting for Learning Tracker... ($i/30)"
+            sleep 2
+          done
+
+          # Verify server is up
+          curl -sf http://127.0.0.1:${{ env.APP_PORT }}/ >/dev/null || {
+            echo "❌ SERVER FAILED TO START"
+            kill $SERVER_PID 2>/dev/null || true
+            exit 1
+          }
+          echo "✅ Learning Tracker is running on port ${{ env.APP_PORT }}"
+
+      # ============================================================
+      # 7. 注册测试管理员账号（在 smoke test 登录之前确保账号存在）
+      # ============================================================
+      - name: 👤 Register test admin user
+        run: |
+          curl -s -X POST http://127.0.0.1:${{ env.APP_PORT }}/api/auth/register \
+            -H "Content-Type: application/json" \
+            -d '{"username":"${{ env.ADMIN_USERNAME }}","password":"${{ env.ADMIN_PASSWORD }}","email":"admin@test.com"}' \
+            || true  # 可能已存在，忽略错误
+          echo "✅ Admin user ensured"
+
+      # ============================================================
+      # 8. 运行 Hercules E2E 冒烟测试
+      # ============================================================
+      - name: 🧪 Run Hercules E2E smoke tests
+        env:
+          E2E_BASE_URL: http://127.0.0.1:${{ env.APP_PORT }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          HEADLESS: "true"
+          RECORD_VIDEO: "true"
+          TAKE_SCREENSHOTS: "true"
+        run: |
+          chmod +x e2e/run_smoke.sh
+          ./e2e/run_smoke.sh
+
+      # ============================================================
+      # 9. 上传测试产物（HTML 报告 + 截图 + 录屏 + 日志）
+      # ============================================================
+      - name: 📊 Upload E2E test artifacts
+        if: always() # 即使测试失败也上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-smoke-report
+          path: |
+            e2e/output/
+            e2e/proofs/
+            e2e/log_files/
+          retention-days: 14
+
+      # ============================================================
+      # 10. 清理服务器
+      # ============================================================
+      - name: 🧹 Cleanup server
+        if: always()
+        run: |
+          kill ${{ env.SERVER_PID }} 2>/dev/null || true
+
+      # ============================================================
+      # 11. 测试结果摘要（提取 JUnit XML 中的数据）
+      # ============================================================
+      - name: 📋 E2E test summary
+        if: always()
+        run: |
+          echo "## E2E Smoke Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          XML_FILE=$(find e2e/output -name '*_result.xml' -print -quit 2>/dev/null || true)
+          HTML_FILE=$(find e2e/output -name '*_result.html' -print -quit 2>/dev/null || true)
+
+          if [ -n "$XML_FILE" ]; then
+            PASS_COUNT=$(grep -c '<testcase' "$XML_FILE" 2>/dev/null || echo "0")
+            FAIL_COUNT=$(grep -c '<failure\|<error' "$XML_FILE" 2>/dev/null || echo "0")
+            echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+            echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| Total Scenarios | $PASS_COUNT |" >> $GITHUB_STEP_SUMMARY
+            echo "| Failures | $FAIL_COUNT |" >> $GITHUB_STEP_SUMMARY
+            echo "| HTML Report | Download from artifacts |" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Download the **e2e-smoke-report** artifact to view the full HTML report, screenshots, and videos." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ No JUnit XML result found. Check the workflow log for details." >> $GITHUB_STEP_SUMMARY
+          fi

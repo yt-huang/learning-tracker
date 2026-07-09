@@ -1,0 +1,48 @@
+{
+  "deepseek": {
+    "planner_agent": {
+      "model_name": "deepseek-chat",
+      "model_api_key": "${DEEPSEEK_API_KEY}",
+      "model_base_url": "https://api.deepseek.com/v1",
+      "model_api_type": "deepseek",
+      "llm_config_params": {
+        "cache_seed": null,
+        "temperature": 0.0,
+        "seed": 12345
+      }
+    },
+    "nav_agent": {
+      "model_name": "deepseek-chat",
+      "model_api_key": "${DEEPSEEK_API_KEY}",
+      "model_base_url": "https://api.deepseek.com/v1",
+      "model_api_type": "deepseek",
+      "llm_config_params": {
+        "cache_seed": null,
+        "temperature": 0.0,
+        "seed": 12345
+      }
+    },
+    "mem_agent": {
+      "model_name": "deepseek-chat",
+      "model_api_key": "${DEEPSEEK_API_KEY}",
+      "model_base_url": "https://api.deepseek.com/v1",
+      "model_api_type": "deepseek",
+      "llm_config_params": {
+        "cache_seed": null,
+        "temperature": 0.0,
+        "seed": 12345
+      }
+    },
+    "helper_agent": {
+      "model_name": "deepseek-chat",
+      "model_api_key": "${DEEPSEEK_API_KEY}",
+      "model_base_url": "https://api.deepseek.com/v1",
+      "model_api_type": "deepseek",
+      "llm_config_params": {
+        "cache_seed": null,
+        "temperature": 0.0,
+        "seed": 12345
+      }
+    }
+  }
+}
